@@ -1,0 +1,27 @@
+PATCH17: Select Moon-fixed SPICE frame (IAU_MOON vs MOON_ME/MOON_PA)
+
+What this patch adds:
+  - scene.toml can now set:  [moon] spice_frame = "MOON_ME"   (default is "IAU_MOON")
+  - The chosen frame is used consistently for:
+      * lon/lat conversion for albedo map sampling and DEM sampling
+      * lunar north vector used as the camera 'up'
+      * DEM normal transformation into J2000
+  - FITS header includes MFRAME = <frame>
+
+Requirements:
+  - If you use MOON_ME or MOON_PA you MUST have loaded the corresponding NAIF
+    lunar FK and binary PCK, e.g.
+      KERNELS/fk/satellites/moon_de440_250416.tf
+      KERNELS/pck/moon_pa_de440_200625.bpc
+
+How to use:
+  1) unzip this patch into repo root
+  2) edit scene.toml:
+       [moon]
+       spice_frame = "MOON_ME"
+  3) run:
+       PYTHONPATH=$PWD uv run python -m synthmoon.run_v0 --config scene.toml
+
+Notes:
+  - Your LROC albedo map and LOLA DEM have their own lon conventions (0..360 or -180..180) controlled by
+    albedo_map_lon_mode / dem_lon_mode. The *frame* controls time-dependent orientation (libration).

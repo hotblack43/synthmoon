@@ -7,6 +7,52 @@ import spiceypy as sp
 
 AU_KM = 149_597_870.700  # IAU 2012 definition, stable
 
+def _is_known_frame(name: str) -> bool:
+    try:
+        return int(sp.namfrm(str(name))) != 0
+    except Exception:
+        return False
+
+def resolve_moon_frame(requested: str) -> str:
+    """Resolve a user-requested lunar body-fixed frame name to one SPICE recognises.
+
+    Common cases:
+      - If you load moon_assoc_me.tf / moon_assoc_pa.tf, the generic aliases MOON_ME/MOON_PA exist.
+      - If not, DE440 kernels define MOON_ME_DE440_ME421 and MOON_PA_DE440.
+
+    If nothing matches, fall back to IAU_MOON.
+    """
+    req = str(requested).strip()
+    if not req:
+        return "IAU_MOON"
+    if _is_known_frame(req):
+        return req
+
+    up = req.upper()
+    if up in ("MOON_ME", "MOON_PA"):
+        if up == "MOON_ME":
+            candidates = [
+                "MOON_ME",
+                "MOON_ME_DE440_ME421",
+                "MOON_ME_DE421",
+                "MOON_ME_DE418",
+                "MOON_ME_DE403",
+            ]
+        else:
+            candidates = [
+                "MOON_PA",
+                "MOON_PA_DE440",
+                "MOON_PA_DE421",
+                "MOON_PA_DE418",
+                "MOON_PA_DE403",
+            ]
+        for c in candidates:
+            if _is_known_frame(c):
+                return c
+
+    # last resort
+    return "IAU_MOON"
+
 @dataclass(frozen=True)
 class SpiceContext:
     et: float
@@ -27,9 +73,7 @@ def get_body_radii_km(body: str) -> np.ndarray:
 
 def earth_site_state_j2000_earthcenter(et: float, lon_deg: float, lat_deg: float, height_m: float) -> np.ndarray:
     """
-    Return Earth-fixed surface site state in Earth-centered J2000 (km, km/s).
-
-    NOTE: This is Earth-centered, not barycentric. If you want SSB coords, add Earth's SSB state.
+    Earth site state in Earth-centered J2000 (km, km/s). Add Earth's SSB state to make it barycentric.
     """
     radii = get_body_radii_km("EARTH")
     re = float(radii[0])
@@ -46,69 +90,51 @@ def earth_site_state_j2000_earthcenter(et: float, lon_deg: float, lat_deg: float
     state_ecef[:3] = r_ecef
 
     xform = np.array(sp.sxform("IAU_EARTH", "J2000", et), dtype=float)  # 6x6
-    state_j2000 = xform @ state_ecef
-    return state_j2000
+    return xform @ state_ecef
 
 def spacecraft_state_j2000(cfg_obs: dict) -> np.ndarray:
-    """
-    Interpret the user-provided spacecraft state as J2000 barycentric (SSB) for v0.
-    """
-    st = np.array(
+    return np.array(
         [
             cfg_obs["x_km"], cfg_obs["y_km"], cfg_obs["z_km"],
             cfg_obs["vx_km_s"], cfg_obs["vy_km_s"], cfg_obs["vz_km_s"],
         ],
         dtype=float,
     )
-    return st
 
 def get_sun_earth_moon_states_ssb(et: float) -> dict:
-    """
-    Return J2000 states (km, km/s) of Sun, Earth, Moon relative to Solar System Barycenter (SSB).
-    """
+    """States relative to Solar System Barycenter (SSB) in J2000."""
     sun = np.array(sp.spkezr("SUN", et, "J2000", "NONE", "0")[0], dtype=float)
     earth = np.array(sp.spkezr("EARTH", et, "J2000", "NONE", "0")[0], dtype=float)
     moon = np.array(sp.spkezr("MOON", et, "J2000", "NONE", "0")[0], dtype=float)
     return {"SUN": sun, "EARTH": earth, "MOON": moon}
 
-def lunar_north_in_j2000(et: float) -> np.ndarray:
+def lunar_north_in_j2000(et: float, moon_frame: str = "IAU_MOON") -> np.ndarray:
     """
-    Unit vector of lunar north pole in J2000 at time et.
-    +Z axis of IAU_MOON transformed into J2000.
+    Unit vector of the lunar +Z axis (north pole) in J2000 at time et.
+
+    By default this uses the IAU_MOON body-fixed frame, but you can pass a
+    higher-accuracy lunar frame such as MOON_ME or MOON_PA if the relevant
+    FK/BPC kernels are loaded.
     """
-    rot = np.array(sp.pxform("IAU_MOON", "J2000", et), dtype=float)
+    mf = resolve_moon_frame(str(moon_frame))
+    rot = np.array(sp.pxform(str(mf), "J2000", et), dtype=float)
     v = rot @ np.array([0.0, 0.0, 1.0], dtype=float)
     return v / np.linalg.norm(v)
 
 def list_loaded_kernels() -> list[str]:
-    """
-    Returns a list of loaded kernel file paths (strings).
-
-    SpiceyPy versions differ: kdata() may return 4 or 5 values.
-    Handle both safely.
-    """
+    """List loaded kernel file paths; handle SpiceyPy 4- or 5-tuple kdata()."""
     count = sp.ktotal("ALL")
     out: list[str] = []
     for i in range(count):
         res = sp.kdata(i, "ALL")
-        if isinstance(res, tuple) or isinstance(res, list):
-            if len(res) == 5:
-                file, ktype, source, handle, found = res
-                if not found:
-                    continue
-                out.append(str(file))
-            elif len(res) == 4:
-                file, ktype, source, handle = res
-                out.append(str(file))
-            else:
+        if isinstance(res, (tuple, list)):
+            if len(res) >= 1:
                 out.append(str(res[0]))
         else:
             out.append(str(res))
     return out
 
 def inv_solar_irradiance_scale(point_km: np.ndarray, sun_pos_km: np.ndarray) -> float:
-    """
-    Return F_sun(point) in arbitrary units where F_sun(1 AU) = 1.
-    """
+    """Return F_sun(point) with F_sun(1 AU)=1."""
     d = float(np.linalg.norm(sun_pos_km - point_km))
     return (AU_KM / d) ** 2

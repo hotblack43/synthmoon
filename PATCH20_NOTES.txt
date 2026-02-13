@@ -1,0 +1,20 @@
+PATCH20: Moon-fixed frame selection that actually works (MOON_ME / MOON_PA)
+
+Fixes
+- Adds resolve_moon_frame() and uses it AFTER kernels are loaded.
+- If you request MOON_ME or MOON_PA but the generic alias isn't present, it falls back to the DE440-specific names:
+    MOON_ME_DE440_ME421
+    MOON_PA_DE440
+- Writes both MFRAMREQ (requested) and MFRAME (resolved) in the FITS header.
+
+Meta-kernel reminder
+To use the DE440 high-accuracy frames you must load (in addition to naif0012.tls, pck00011.tpc, de442s.bsp):
+  $KERNELS/pck/moon_pa_de440_200625.bpc
+  $KERNELS/fk/satellites/moon_de440_250416.tf
+Optionally (gives the *generic* aliases MOON_ME and MOON_PA):
+  $KERNELS/fk/satellites/moon_assoc_me.tf
+  $KERNELS/fk/satellites/moon_assoc_pa.tf
+
+scene.toml
+  [moon]
+  spice_frame = "MOON_ME"   # or "MOON_PA"; or set explicit DE440 name

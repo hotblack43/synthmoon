@@ -1,11 +1,15 @@
 [time]
+# One UTC per exposure (milliseconds). Stored to FITS as DATE-OBS and JD-OBS (full JD, f15.7).
 utc = "2026-02-13T03:12:45Z"
 
 [observer]
+# "earth_site" uses lon/lat/height on Earth (IAU_EARTH).
+# "spacecraft_state" uses an inertial state vector you supply.
 mode = "earth_site"  # "earth_site" | "spacecraft_state"
 lon_deg = 12.5683
 lat_deg = 55.6761
 height_m = 20.0
+
 # If spacecraft_state:
 # frame = "J2000"
 # x_km = 0.0
@@ -20,32 +24,71 @@ nx = 512
 ny = 512
 fov_deg = 1.0
 roll_deg = 0.0
-pointing = "moon_center"  # later: explicit RA/Dec, etc.
+pointing = "moon_center"  # currently supported: "moon_center"
 
 [paths]
 spice_kernels_dir = "KERNELS"
-moon_dem = "DATA/moon_lola_dem.tif"
-moon_albedo = "DATA/moon_albedo.tif"
-earth_albedo = "DATA/earth_albedo.tif"
-out_fits = "OUTPUT/synth_moon.fits"
+meta_kernel = "KERNELS/generic.tm"
+out_fits = "OUTPUT/synth_moon_v0.fits"
 
 [moon]
-shape = "sphere_plus_dem"  # later: "mesh"
-brdf = "lambert"           # later: "hapke"
+radius_km = 1737.4
+brdf = "lambert"     # later: "hapke"
+
+# Constant albedo (used if albedo_map_fits not set)
+albedo = 0.12
+
+# Optional lunar albedo map (equirectangular FITS). Example: LROC WAC 643 nm mosaic converted to FITS.
+# albedo_map_fits = "DATA/moon_albedo_lroc_wac643_016ppd_mean0p12.fits"
+# albedo_map_lon_mode = "-180_180"   # "-180_180" or "0_360"
+# albedo_map_scale = 1.0
+
+# Optional lunar DEM (LOLA LDEM_16 converted to FITS; values are radius in metres).
+# dem_fits = "DATA/moon_dem_lola_ldem16_m.fits"
+# dem_lon_mode = "0_360"   # LOLA cylindrical products are typically 0..360E
+# dem_units = "m"
+# dem_scale = 1.0          # set >1 temporarily to exaggerate relief for debugging
+# dem_refine_iter = 3      # 2–4 reasonable
 
 [earth]
+radius_km = 6378.1366
 brdf = "lambert"
+
+# Base Earth albedo scale (multiplicative)
+albedo = 0.30
+
+# Earth treated as an extended disk for earthlight integration
 earth_disk_samples = 192
+
+# Tile caching size (pixels); 16 is a good default; 1 disables caching
 earthlight_tile_px = 16
+
+# Optional Earth albedo map FITS (equirectangular). If omitted, a toy land/ocean + clouds model may be used.
+# albedo_map_fits = "DATA/earth_albedo.fits"
+# albedo_map_lon_mode = "0_360"
+# land_albedo = 0.25
+# ocean_albedo = 0.06
+# cloud_amount = 0.3     # 0..1
+# cloud_albedo = 0.6
+
+[sun]
+# Extended solar disk (finite angular size) matters near the terminator/horizon.
+extended_disk = true
+disk_samples = 64
+radius_km = 695700.0
 
 [illumination]
 include_sun = true
 include_earthlight = true
 
 [shadows]
-mode = "simple"            # later: "horizon" | "raycast_mesh"
+# v0.1.x: simple geometric horizon tests; terrain self-shadowing is a planned upgrade
+mode = "simple"
 
 [output]
-store_int16 = true
-bunit = "I/F"              # or "W m-2 sr-1" later
-store_float_extension = true
+# Keep computations float. For convenient viewing in DS9, the primary cube is scaled to 0..65535 in float.
+primary_dtype = "float32"          # "float32" or "float64"
+primary_scaled_0_65535 = true
+store_raw_extension = true         # store unscaled physical-ish layer(s) as extra extension if implemented
+write_cube = true                  # write a multi-layer cube in the primary HDU
+bunit = "I/F_moon"                 # unit label for the primary scaled layer (actual physical units are in other layers)

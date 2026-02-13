@@ -1,103 +1,59 @@
-# SPEC.md — Synthetic Moon Images with Sunlight + Earthlight (Earthshine)
+# SPEC.md — SYNTHMOON: Synthetic Moon Images with Sunlight + Earthlight (Earthshine)
 
 ## Goal
-Create a modular Python renderer that generates synthetic 512×512 monochrome (initially) images of the Moon as seen from a specified observer in space or on Earth. Illumination must include **direct sunlight** and **earthlight** (sunlight reflected by Earth). Geometry must come from **celestial mechanics** (SPICE). No parallel-ray approximations: all illumination directions derived from finite-distance bodies.
+Build a modular Python renderer that generates synthetic **512×512** Moon images with **1°×1°** field of view, as seen from a specified observer (Earth site or spacecraft). Illumination includes **direct sunlight** and **earthlight** (sunlight reflected by Earth). Geometry must come from **SPICE**.
 
-## Key Requirements
-- **Image geometry**
-  - Image size: **512 × 512**
-  - Field of view: **1.0° × 1.0°** (square)
-  - Camera model: pinhole/gnomonic projection (upgradeable)
-- **Time handling**
-  - One UTC timestamp per image (exposures are milliseconds)
-  - Store **full Julian Date** in FITS header as **f15.7**: `JD-OBS`
-  - Do **not** use MJD anywhere
-- **Numeric pipeline**
-  - Compute radiance/intensity in **floating point** throughout (float32/float64)
-  - Earthshine is faint: avoid 8-bit rendering
-- **Output**
-  - Store outputs as **16-bit FITS** images
-  - Use **BSCALE/BZERO** to preserve floating-point physical values when storing as int16
-  - Include an **extensive FITS header** with full provenance and settings
-- **Physics / realism**
-  - Moon surface includes **lunar orography** (DEM-based)
-  - Moon reflectance: **Lambert first**, later upgradeable to **Hapke**
-  - Earth reflectance: **map-based albedo** + simple reflectance (Lambert first), later spectral/BRDF upgrades
-  - Earth is an **extended source**: Earthlight computed as a disk integral; visible Earth varies across lunar surface points
-  - Shadowing:
-    - v0: simple (sign tests / optional coarse terrain checks)
-    - later: upgradeable to better terrain self-shadowing (horizon maps / ray casting)
+## Non-negotiables
+- One UTC timestamp per image; store **full Julian Date** in FITS header as **JD-OBS** formatted **f15.7** (no MJD).
+- Compute in **floating point** throughout (earthshine is faint).
+- Output is **DS9-friendly FITS** and must not silently quantise to int16.
 
-## Geometry (SPICE)
-Use SPICE via SpiceyPy for:
-- Sun/Earth/Moon positions at UTC
-- Body-fixed frames (e.g. IAU_EARTH, IAU_MOON)
-- Observer location:
-  - Earth surface lon/lat/height OR spacecraft state vector
-- Frame transforms for camera pointing and for mapping surface points to lon/lat
+## Current v0.1.x behaviour (what exists now)
+### Geometry
+- Uses SpiceyPy with a small generic NAIF kernel set (LSK + PCK + planetary SPK).
+- Observer:
+  - Earth site lon/lat/height OR spacecraft inertial state.
+- Camera:
+  - Pinhole/gnomonic rays; pointing set to Moon centre; roll supported.
 
-## Performance Principles (avoid wasted work)
-- Render only the Moon ROI on the detector (compute apparent Moon disk → bounding box)
-- Cheap ray–Moon bounding sphere/ellipsoid test first; drop misses immediately
-- DEM intersection via iterative “sphere + DEM displacement” (v0), upgradeable to mesh/BVH later
-- Earthlight:
-  - treat Earth as extended disk
-  - avoid per-pixel Earth facet loops by using **tiling / caching**:
-    - compute Earth-disk sample directions & Earth-hit mapping for one representative point per tile
-    - reuse within tile; refine tiles near limb/horizon as needed
-  - early-out when Earth is below local horizon
+### Moon surface
+- Base surface is a sphere of radius `moon.radius_km`.
+- **Lunar albedo map** supported via an equirectangular FITS (e.g., LROC WAC 643 nm mosaic converted to FITS).
+- **Orography (LOLA DEM)**:
+  - LOLA LDEM_16 global DEM converted to FITS.
+  - Ray–Moon hit is refined using a “sphere + DEM displacement” iteration.
+  - Surface normals derived from DEM slopes (finite differences) for Lambert shading.
+  - Diagnostic layers: elevation (metres) and slope (degrees).
 
-## Modular Architecture
-All user choices live in a single central config (TOML). Suggested modules:
+### Illumination
+- Sunlight and earthlight can be toggled independently.
+- **Earthlight** treats Earth as an extended disk and integrates over disk samples; uses tile caching for speed.
+- **Sun as extended disk** (finite solar diameter):
+  - Adaptive disk sampling only in the narrow partial-visibility band near terminator/horizon.
+  - Else point-source Sun is used for speed.
 
-- `config.py` — load/validate config, expose one Config object
-- `spice/`
-  - `kernels.py` — meta-kernel handling, kernel provenance logging
-  - `geometry.py` — states, frames, time conversions (UTC↔ET↔JD)
-- `camera.py` — pixel rays, camera pointing/roll, FOV handling
-- `moon/`
-  - `dem.py` — DEM sampling, gradients → normals
-  - `surface.py` — ray hit refine (sphere+DEM); later mesh intersection
-  - `brdf.py` — Lambert now, Hapke later (same interface)
-- `earth/`
-  - `map.py` — albedo sampling
-  - `brdf.py` — Lambert now; later ocean/glint/clouds/spectral
-  - `extended_source.py` — Earth-disk quadrature + per-tile caching
-- `illumination.py` — sunlight + earthlight irradiance at lunar points
-- `render.py` — orchestration, masks, tiling, outputs
-- `io_fits.py` — FITS writer with int16 scaling + extensive header
+### Shadowing
+- v0.1.x uses simple geometric horizon tests.
+- Planned: DEM-based terrain self-shadowing for both Sun and Earthlight directions (hard shadows first, then penumbra).
 
-## Config (single source of truth)
-A `scene.toml` config controls all run-time choices, including:
-- UTC timestamp
-- observer specification
-- camera FOV, image size, roll
-- DEM and albedo map paths
-- illumination toggles and sampling counts
-- shadowing mode
-- output paths and metadata tags
+### Output format
+- Writes a single **FITS cube in the PRIMARY HDU** (NAXIS=3). Layer names are stored as `LAY1..LAYN` keywords.
+- Primary layers are stored as **float32/float64**; an optional “scaled for viewing” layer maps values to **0..65535** (still float).
+- Typical layers include:
+  - SCALED (0..65535 float for viewing)
+  - IFTOTAL, IF_SUN, IF_EARTH (dimensionless I/F)
+  - RADTOT, RAD_SUN, RAD_EAR (broadband radiance, W m⁻² sr⁻¹; TSI-based)
+  - ALBMOON (albedo actually used per pixel)
+  - ELEV_M (metres) and SLOPDEG (degrees) when DEM is enabled
+- FITS headers include JD-OBS, DATE-OBS, kernel provenance, and key config settings.
 
-## FITS Header Requirements
-Must include at least:
-- `JD-OBS` as **string** formatted `f15.7`
-- UTC string: `DATE-OBS` (ISO8601)
-- Observer definition (site or spacecraft)
-- Camera: `NAXIS1/2`, `FOV_DEG`, `CRPIX*`, `CDELT*`, pointing definition
-- Key geometry scalars: observer–Moon range, Moon phase angle, Earth angular diameter (as seen from Moon centre or representative point), etc.
-- Data provenance: DEM/albedo filenames, kernel list / meta-kernel name
-- Physics settings: BRDF modes, sample counts, tile size, shadow mode
-- Scaling: BSCALE/BZERO and physical units (`BUNIT`)
+## Performance principles
+- Early-out for rays that miss the Moon (bounding sphere).
+- Optional tile caching for earthlight disk integration.
+- Adaptive sampling for extended Sun (only near terminator).
 
-## Planned Upgrades
-1) Spectral/filtered rendering:
-- wavelength grid + solar spectrum
-- wavelength-dependent BRDFs (Earth + Moon)
-
-2) Moon Hapke photometry:
-- global params initially; later spatially varying parameter maps
-
-3) Better shadowing:
-- horizon maps or ray casting against a mesh
-
-4) Sensor realism:
-- PSF, exposure, noise model (optional)
+## Planned upgrades
+1) Terrain self-shadowing (DEM horizon/ray test) for Sun and Earthlight.
+2) Hapke photometry for the Moon (spatially varying parameter maps later).
+3) Spectral/filtered rendering: wavelength grid + solar spectrum + wavelength-dependent BRDFs.
+4) Better Earth model: map-based albedo + clouds + later glint and spectral reflectance.

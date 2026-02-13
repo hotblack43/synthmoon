@@ -16,6 +16,7 @@ from .spice_tools import (
     lunar_north_in_j2000,
     list_loaded_kernels,
     inv_solar_irradiance_scale,
+    resolve_moon_frame,
 )
 from .camera import camera_basis_from_boresight_and_up, pixel_rays, moon_roi_bbox
 from .intersect import ray_sphere_intersect, ray_sphere_intersect_varradius
@@ -31,9 +32,9 @@ def _short(s: str, n: int = 68) -> str:
     return "…" + s[-(n - 1):]
 
 
-def _moon_lonlat_deg(et: float, moon_center_j2000: np.ndarray, pts_j2000: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Convert J2000 vectors (Moon-centred) to IAU_MOON lon/lat in degrees."""
-    M = sp.pxform("J2000", "IAU_MOON", float(et))
+def _moon_lonlat_deg(et: float, moon_center_j2000: np.ndarray, pts_j2000: np.ndarray, moon_frame: str = "IAU_MOON") -> tuple[np.ndarray, np.ndarray]:
+    """Convert J2000 vectors (Moon-centred) to Moon-fixed lon/lat in degrees."""
+    M = sp.pxform("J2000", str(moon_frame), float(et))
     v = pts_j2000 - moon_center_j2000[None, :]
     vf = (M @ v.T).T
     r = np.linalg.norm(vf, axis=1)
@@ -54,6 +55,11 @@ def main(argv: list[str] | None = None) -> None:
 
     utc = cfg.utc
     et = utc_to_et(utc)
+
+    moon_frame_req = str(cfg.moon.get("spice_frame", "IAU_MOON"))
+    moon_frame = resolve_moon_frame(moon_frame_req)
+    if moon_frame != moon_frame_req:
+        print(f"NOTE: Requested moon.spice_frame={moon_frame_req!r} -> using {moon_frame!r} (loaded frames)")
 
     # Body states (SSB origin) in J2000
     states = get_sun_earth_moon_states_ssb(et)
@@ -84,7 +90,7 @@ def main(argv: list[str] | None = None) -> None:
     dist_om = float(np.linalg.norm(boresight))
     boresight_u = boresight / dist_om
 
-    north = lunar_north_in_j2000(et)
+    north = lunar_north_in_j2000(et, moon_frame=moon_frame)
     R = camera_basis_from_boresight_and_up(boresight_u, north, float(cfg.camera.get("roll_deg", 0.0)))
 
     nx = int(cfg.camera.get("nx", 512))
@@ -151,7 +157,7 @@ def main(argv: list[str] | None = None) -> None:
         lon = None
         lat = None
         if (moon_map is not None) or (moon_dem is not None):
-            lon, lat = _moon_lonlat_deg(et, moon_pos, pts)
+            lon, lat = _moon_lonlat_deg(et, moon_pos, pts, moon_frame=moon_frame)
 
         # DEM refinement: iterate per-ray radius based on DEM (treat dem_scale as relief scaler)
         if moon_dem is not None and dem_refine_iter > 0:
@@ -166,11 +172,11 @@ def main(argv: list[str] | None = None) -> None:
                 # Keep previous t for rays that fail this refinement step
                 t_hit = np.where(hit_ref, t_ref, t_hit)
                 pts = origins_hit + t_hit[:, None] * dirs_hit
-                lon, lat = _moon_lonlat_deg(et, moon_pos, pts)
+                lon, lat = _moon_lonlat_deg(et, moon_pos, pts, moon_frame=moon_frame)
 
         # Normals + DEM diagnostics
         if moon_dem is not None:
-            normals, slope_deg = moon_dem.normals_j2000(et, lon, lat)
+            normals, slope_deg = moon_dem.normals_j2000(et, lon, lat, moon_frame=moon_frame)
             elev_m = moon_dem.elevation_m(lon, lat) * dem_scale  # relief-scaled elevation
 
             img_elev_m[ij_hit[:, 1], ij_hit[:, 0]] = elev_m
@@ -184,7 +190,7 @@ def main(argv: list[str] | None = None) -> None:
         A_m = np.full(pts.shape[0], A0, dtype=np.float64)
         if moon_map is not None:
             if lon is None or lat is None:
-                lon, lat = _moon_lonlat_deg(et, moon_pos, pts)
+                lon, lat = _moon_lonlat_deg(et, moon_pos, pts, moon_frame=moon_frame)
             A_map = moon_map.sample(lon, lat)
             A_scale = float(cfg.moon.get("albedo_map_scale", 1.0))
             A_m = np.clip(A_map * A_scale, 0.0, 1.0)
@@ -310,6 +316,7 @@ def main(argv: list[str] | None = None) -> None:
         "TSI1AU": (tsi_1au, "TSI 1 AU"),
         "FSUNM": (fsun_moon, "Fsun Moon"),
         "RADFAC": (rad_fac, "Fsun/pi"),
+        "MFRAME": (moon_frame, "Moon-fixed frame"),
         "MKFILE": (Path(mk).name, "MK"),
         "KCOUNT": (len(kernels), "K n"),
     }

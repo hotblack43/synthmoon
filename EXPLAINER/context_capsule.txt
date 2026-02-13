@@ -1,1 +1,28 @@
-We’re building a modular Python renderer for synthetic Moon images (512×512, 1°×1° FOV) with correct SPICE celestial geometry. Illumination includes sunlight + extended-source earthlight (earthshine). Moon surface uses a DEM for orography; Lambert initially, Hapke later; spectral rendering later (solar spectrum + wavelength-dependent BRDFs). Compute everything in float; output 16-bit FITS using BSCALE/BZERO; extensive FITS header including JD-OBS formatted as f15.7 (no MJD). User choices live in one scene.toml config. Performance: render Moon ROI only; cheap bounding-sphere hit mask; DEM refine; earthlight via Earth-disk quadrature with tile caching and horizon early-outs.
+SYNTHMOON (v0.1.x) summary — paste into a new chat to restore context
+
+Goal
+- Modular Python renderer for synthetic lunar images (512×512, 1°×1° FOV) with correct SPICE geometry.
+- Illumination includes sunlight and earthlight (earthshine). Earth and Sun can be treated as extended disks near horizons/terminator.
+- Compute in float throughout; write DS9-friendly FITS output.
+
+Current implemented features (v0.1.2-ish)
+- SPICE geometry via SpiceyPy + generic NAIF kernels (LSK/PCK + planetary SPK).
+- Observer: Earth site lon/lat/height or spacecraft state.
+- Camera: pinhole/gnomonic; pointing=moon_center; roll supported.
+- Moon albedo:
+  - Constant albedo OR map-based albedo from an equirectangular FITS (e.g., LROC WAC 643 nm mosaic converted to FITS).
+- Moon orography:
+  - LOLA LDEM_16 global DEM converted to FITS; per-ray hit-point refinement (sphere + DEM) and DEM-based normals for Lambert shading.
+  - Writes diagnostic layers: ELEV_M, SLOPDEG.
+- Earthlight:
+  - Earth treated as extended disk; disk quadrature with tile caching; early-outs when Earth below local horizon.
+- Sun:
+  - Supports extended solar disk sampling in the narrow partial-visibility band near the terminator/horizon (adaptive), otherwise uses point-source (fast).
+- Output:
+  - Writes a single FITS cube in the primary HDU (NAXIS=3) with named layers (LAY1..).
+  - Primary values are floats scaled to 0..65535 for easy viewing; additional layers include I/F and broadband radiance (TSI-based) plus component splits (Sun/Earth) and ALBMOON.
+  - JD-OBS stored as full JD with decimals (f15.7), no MJD.
+
+Workflow
+- Runs with uv (no manual venv activation): PYTHONPATH=$PWD uv run python -m synthmoon.run_v0 --config scene.toml
+- Use git tags to pin working states (e.g., v0.1.0, v0.1.2) and a “panic runner” script to return to known-good versions.

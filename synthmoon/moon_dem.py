@@ -113,9 +113,16 @@ class LunarDEM:
         slope_deg = np.rad2deg(np.arccos(cosang))
         return n, slope_deg
 
-    def normals_j2000(self, et: float, lon_deg: np.ndarray, lat_deg: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        n_iau, slope_deg = self.normals_iau(lon_deg, lat_deg)
-        M = sp.pxform("IAU_MOON", "J2000", float(et))
-        n_j2k = (M @ n_iau.T).T
+    def normals_j2000(self, et: float, lon_deg: np.ndarray, lat_deg: np.ndarray, moon_frame: str = "IAU_MOON") -> tuple[np.ndarray, np.ndarray]:
+        """
+        Return (normals_j2000, slope_deg) for given lon/lat arrays.
+
+        The lon/lat are interpreted in the chosen Moon-fixed frame (default: IAU_MOON).
+        If you choose MOON_ME/MOON_PA, be sure your DEM and albedo maps are defined
+        in the same convention.
+        """
+        n_fix, slope_deg = self.normals_iau(lon_deg, lat_deg)
+        M = sp.pxform(str(moon_frame), "J2000", float(et))
+        n_j2k = (M @ n_fix.T).T
         n_j2k = n_j2k / np.maximum(np.linalg.norm(n_j2k, axis=1)[:, None], 1e-15)
         return n_j2k, slope_deg

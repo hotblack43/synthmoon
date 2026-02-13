@@ -1,0 +1,2 @@
+PATCH21: Recovery + safe lunar frame selection (restores LROC albedo + DEM + sun disk) after patch20.
+Files: synthmoon/run_v0.py, synthmoon/spice_tools.py, synthmoon/moon_dem.py
