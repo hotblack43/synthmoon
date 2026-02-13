@@ -10,3 +10,7 @@ synthmoon_v0_patch*.zip
 .venv/
 __pycache__/
 *.pyc
+
+# DEM / big data
+DATA/LOLA_GDR/
+DATA/moon_dem_*.fits
