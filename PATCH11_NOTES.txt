@@ -1,0 +1,38 @@
+PATCH11 NOTES (v0.2-ish)
+
+Implements your requested next steps:
+
+(1) Diagnostics as layers in ONE FITS cube (no DS9 bracket syntax needed)
+    Cube layers now include:
+      SCALED, IFTOTAL, IF_SUN, IF_EARTH, RADTOT, RAD_SUN, RAD_EAR, ALBMOON
+    DS9 will show a z-slider; you can scroll through layers.
+
+(2) Map-based albedos (simple, upgradeable)
+    Moon:
+      [moon]
+      albedo = 0.12
+      albedo_map_fits = "DATA/moon_albedo.fits"        # optional, equirect 2D
+      albedo_map_lon_mode = "0_360"                    # or "-180_180"
+      albedo_map_scale = 1.0                           # multiplier
+    Earth:
+      [earth]
+      albedo = 1.0                                     # acts as a scale on the map/toy albedo
+      albedo_map_fits = "DATA/earth_albedo.fits"       # optional; if absent uses a toy land/ocean pattern
+      albedo_map_lon_mode = "0_360"
+      land_albedo = 0.25
+      ocean_albedo = 0.06
+      cloud_amount = 0.3                               # 0..1, deterministic field
+      cloud_albedo = 0.6
+
+Notes:
+- FITS maps are assumed equirectangular with rows from +90 (north) at top to -90 at bottom.
+  If your map is flipped, just flip the FITS array once.
+- The Earth map uses IAU_EARTH rotation from SPICE, so it rotates with UTC.
+
+Outputs:
+- By default this patch writes to OUTPUT/synth_moon_cube.fits (set [paths].out_fits to override).
+
+Apply:
+  cd ~/WORKSHOP/SYNTHMOON
+  unzip -o synthmoon_v0_patch11.zip -d .
+  PYTHONPATH=$PWD uv run python -m synthmoon.run_v0 --config scene.toml

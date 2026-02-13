@@ -38,7 +38,7 @@ albedo = 0.30
 radius_km = 6378.1366
 brdf = "lambert"
 earth_disk_samples = 192
-earthlight_tile_px = 1
+earthlight_tile_px = 16
 
 [illumination]
 include_sun = true
@@ -48,7 +48,9 @@ include_earthlight = true
 mode = "simple"      # v0: "simple" only
 
 [output]
-store_int16 = true
-store_float_extension = true
-bunit = "I/F_moon"   # I/F normalised to solar irradiance at the lunar point
-scale_mode = "full_range"  # "full_range" only in v0
+primary_dtype = "float64"          # or "float32"
+primary_scaled_0_65535 = true
+store_raw_extension = true
+bunit = "I/F_moon"
+write_cube = true
+

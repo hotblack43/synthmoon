@@ -1,0 +1,20 @@
+PATCH8 NOTES (versioning)
+
+This is still "v0" physics, but it's a meaningful refinement, so I'd call it v0.1.
+
+What changes:
+- Explicitly accounts for PARTIAL Earth visibility near the lunar horizon.
+  (Earth centre can be below the horizon while part of the disk is still visible.)
+- Replaces the crude 'Earth-centre above horizon' skip with:
+    dot(radial, e_dir) > -sin(alpha)
+- Applies an explicit per-direction radial-horizon mask:
+    keep only sampled directions omega with dot(radial, omega) > 0
+
+Why this matters:
+- It avoids too-sharp drop-offs near the limb (ring-like artefacts).
+- It stays sensible when you later use DEM-derived normals (slopes), because visibility is geometric.
+
+How to apply:
+  cd ~/WORKSHOP/SYNTHMOON
+  unzip -o synthmoon_v0_patch8.zip -d .
+  uv run python -m synthmoon.run_v0 --config scene.toml

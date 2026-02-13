@@ -1,0 +1,23 @@
+PATCH10 NOTES
+
+Why you didn't "see" the physical units image in DS9:
+- DS9 opens the PRIMARY HDU by default.
+- The radiance plane is an *extension* named RADTSI.
+  Open it explicitly:
+     ds9 'OUTPUT/synth_moon_v0.fits[RADTSI]' &
+
+This patch adds an option to store ALL layers in ONE FITS cube (NAXIS=3):
+  layer 1: SCALED  (0..65535 float, display-friendly)
+  layer 2: IFRAW   (I/F, dimensionless)
+  layer 3: RADTSI  (W m-2 sr-1, broadband radiance; if enabled)
+
+Enable cube output in scene.toml:
+  [output]
+  write_cube = true
+
+Then run:
+  PYTHONPATH=$PWD uv run python -m synthmoon.run_v0 --config scene.toml
+
+In DS9 you should then see a cube slider (z-axis) and can switch layers.
+
+Also still supports MEF mode (default write_cube=false), which keeps RADTSI as an extension.

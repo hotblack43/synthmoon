@@ -1,0 +1,26 @@
+PATCH9 NOTES
+
+Adds a broadband radiance plane (TSI-based) in addition to the existing scaled primary image.
+
+What you get in OUTPUT/synth_moon_v0.fits:
+- Primary HDU: float (BITPIX=-32 or -64), scaled to 0..65535 for display (still float).
+- RAW32/RAW64 extension (if enabled): unscaled I/F (dimensionless).
+- RADTSI extension (new, if enabled): broadband radiance in W m-2 sr-1 computed from I/F using:
+    I = (I/F) * F_sun(moon) / pi
+  where F_sun(moon) = TSI_1AU * (AU / |Sun-Moon|)^2.
+
+Config (scene.toml) knobs under [output]:
+  write_radiance_tsi = true     # default True in code
+  tsi_w_m2 = 1361.0             # W m^-2 at 1 AU (override if you prefer 1361.6 etc)
+  primary_dtype = "float32"     # keep small files, still accurate for output
+  store_raw_extension = true
+
+Apply:
+  cd ~/WORKSHOP/SYNTHMOON
+  unzip -o synthmoon_v0_patch9.zip -d .
+  PYTHONPATH=$PWD uv run python -m synthmoon.run_v0 --config scene.toml
+
+Inspect in DS9:
+  ds9 'OUTPUT/synth_moon_v0.fits' &
+  ds9 'OUTPUT/synth_moon_v0.fits[RAW32]' &
+  ds9 'OUTPUT/synth_moon_v0.fits[RADTSI]' &
