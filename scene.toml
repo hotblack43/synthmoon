@@ -1,6 +1,6 @@
 [time]
 # One UTC per exposure (milliseconds). Stored to FITS as DATE-OBS and JD-OBS (full JD, f15.7).
-utc = "2026-02-13T03:12:45Z"
+utc = "2026-02-13T03:18:45Z"
 
 [observer]
 # "earth_site" uses lon/lat/height on Earth (IAU_EARTH).
@@ -78,12 +78,12 @@ earth_disk_samples = 192
 earthlight_tile_px = 16
 
 # Optional Earth albedo map FITS (equirectangular). If omitted, a toy land/ocean + clouds model may be used.
-# albedo_map_fits = "DATA/earth_albedo.fits"
-# albedo_map_lon_mode = "0_360"
- land_albedo = 0.25
- ocean_albedo = 0.06
- cloud_amount = 0.3     # 0..1
- cloud_albedo = 0.6
+albedo_map_fits = "DATA/earth_albedo.fits"
+albedo_map_lon_mode = "0_360"
+land_albedo = 0.25
+ocean_albedo = 0.06
+cloud_amount = 0.3     # 0..1
+cloud_albedo = 0.6
 
 # optional: ocean sunglint (simple, fast)
 ocean_glint_strength = 0.15

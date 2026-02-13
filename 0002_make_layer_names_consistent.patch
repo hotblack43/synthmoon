@@ -1,0 +1,29 @@
+diff --git a/synthmoon/io_fits.py b/synthmoon/io_fits.py
+index 2222222..3333333 100644
+--- a/synthmoon/io_fits.py
++++ b/synthmoon/io_fits.py
+@@ -1,5 +1,6 @@
+ from astropy.io import fits
++import numpy as np
+
+ def write_fits_cube(out_path, cube, layer_names, header_kv=None):
+     # ... existing header creation ...
+@@ -25,12 +26,20 @@ def write_fits_cube(out_path, cube, layer_names, header_kv=None):
+-    nlayers = cube.shape[-1]
++    # Determine number of layers robustly
++    if cube.ndim != 3:
++        raise ValueError(f"Expected 3D cube, got shape {getattr(cube, 'shape', None)}")
++    # Prefer last-axis layers if it matches names length, else assume first-axis layers
++    if layer_names is not None and len(layer_names) == cube.shape[-1]:
++        nlayers = cube.shape[-1]
++    elif layer_names is not None and len(layer_names) == cube.shape[0]:
++        nlayers = cube.shape[0]
++    else:
++        nlayers = cube.shape[-1]
+
+     if layer_names is None:
+         layer_names = [f"LAYER{i+1}" for i in range(nlayers)]
+
+     # Store layer names as LAY1..LAYN
+     for i, nm in enumerate(layer_names, start=1):
+         hdr[f"LAY{i}"] = (str(nm), "Cube layer name (1-based)")

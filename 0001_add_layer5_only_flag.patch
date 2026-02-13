@@ -1,0 +1,80 @@
+diff --git a/synthmoon/run_v0.py b/synthmoon/run_v0.py
+index 1234567..89abcde 100644
+--- a/synthmoon/run_v0.py
++++ b/synthmoon/run_v0.py
+@@ -1,6 +1,7 @@
+ import argparse
+ import sys
++import numpy as np
+
+ # ... your existing imports ...
+
+@@ -42,6 +43,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
+     p.add_argument("--out", required=True, help="Output FITS filename")
+
++    # When set: write only layer 5 (1-based) into the FITS cube.
++    # Default behaviour: write all layers.
++    p.add_argument(
++        "--layer5-only",
++        action="store_true",
++        help="Write only layer 5 (1-based) to the FITS cube output (default writes all layers).",
++    )
++
+     return p
+
++def _select_only_layer5(cube, layer_names):
++    """
++    Return (cube5, names5) where cube5 contains only layer 5 (1-based).
++    Supports cube shapes (ny, nx, nlayers) or (nlayers, ny, nx).
++    """
++    if cube is None:
++        raise ValueError("cube is None")
++    if layer_names is None:
++        layer_names = []
++
++    # (ny, nx, nlayers)
++    if cube.ndim == 3 and cube.shape[-1] >= 1:
++        nl = cube.shape[-1]
++        axis_last = True
++    # (nlayers, ny, nx)
++    elif cube.ndim == 3 and cube.shape[0] >= 1:
++        nl = cube.shape[0]
++        axis_last = False
++    else:
++        raise ValueError(f"Unexpected cube shape: {getattr(cube, 'shape', None)}")
++
++    if nl < 5:
++        raise ValueError(f"Requested layer 5, but cube has only {nl} layer(s).")
++
++    idx0 = 4  # layer 5 in 0-based indexing
++    if axis_last:
++        cube5 = cube[..., idx0:idx0+1]
++    else:
++        cube5 = cube[idx0:idx0+1, ...]
++
++    if len(layer_names) >= 5:
++        names5 = [layer_names[4]]
++    else:
++        names5 = ["LAYER5"]
++    return cube5, names5
++
+ def main(argv=None) -> int:
+     args = build_arg_parser().parse_args(argv)
+
+@@ -120,12 +171,26 @@ def main(argv=None) -> int:
+     # Render scene -> returns cube + names (adjust to your real call signatures)
+     cube, layer_names, header_kv = render_scene(config=args.config)
+
++    # Optional: only keep layer 5
++    if args.layer5_only:
++        cube, layer_names = _select_only_layer5(cube, layer_names)
++
+     # Write FITS cube
+     write_fits_cube(
+         out_path=args.out,
+         cube=cube,
+         layer_names=layer_names,
+         header_kv=header_kv,
+     )
+
+     return 0
