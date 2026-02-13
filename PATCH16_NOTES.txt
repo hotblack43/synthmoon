@@ -1,0 +1,23 @@
+PATCH16 (v0.1.2): Extended Sun disk (finite solar diameter) for Lambert sunlight
+
+What changed
+- Adds lambert_sun_if_extended_disk(): treats Sun as an extended disk (default R_sun=695700 km)
+  and handles partial visibility near the local horizon/terminator.
+- run_v0.py now supports an optional [sun] section in scene.toml:
+    [sun]
+    extended_disk = true
+    disk_samples  = 64       # only used in the narrow partial-visibility band
+    radius_km     = 695700.0 # optional override
+- Header now records SUNEXT/SUNSAMP/SUNRADKM/SUNDIA.
+
+Physics model
+- Uniform radiance solar disk, sampled over solid angle.
+- Simple horizon mask relative to the mean-sphere tangent plane:
+    visible if dot(radial, omega) > 0
+  (This softens the terminator and creates a penumbra band of order ~0.53°.)
+
+Files in this patch
+- synthmoon/illumination.py
+- synthmoon/run_v0.py
+
+No new dependencies.

@@ -58,6 +58,94 @@ def lambert_sun_if(hit_points: np.ndarray, normals: np.ndarray, sun_pos: np.ndar
     A = moon_albedo if np.isscalar(moon_albedo) else np.asarray(moon_albedo, dtype=float)
     return A * mu0
 
+def lambert_sun_if_extended_disk(
+    hit_points: np.ndarray,
+    normals: np.ndarray,
+    moon_center: np.ndarray,
+    sun_pos: np.ndarray,
+    moon_albedo: np.ndarray | float,
+    n_samples: int = 64,
+    sun_radius_km: float = 695700.0,
+) -> np.ndarray:
+    """
+    Lambertian sunlight I/F treating the Sun as an extended disk (not a point).
+
+    This matters only in a narrow band near the local horizon/terminator, where
+    the Sun is partially visible. We handle that by sampling directions across the
+    solar disk and applying a simple horizon mask (mean-sphere horizon):
+        visible if dot(radial, omega) > 0
+
+    For speed, pixels for which the full solar disk is certainly visible use the
+    point-source approximation (lambert_sun_if). Pixels with no possible visibility
+    return 0. Only the partial-visibility band is sampled.
+
+    Parameters
+    ----------
+    hit_points : (N,3) J2000
+    normals    : (N,3) J2000 unit normals (can include DEM slopes)
+    moon_center: (3,)  J2000
+    sun_pos    : (3,)  J2000 (SSB or same origin as hit_points)
+    moon_albedo: scalar or (N,)
+    n_samples  : number of disk samples (only used near horizon)
+    sun_radius_km : physical solar radius in km
+
+    Returns
+    -------
+    if_sun : (N,) I/F (dimensionless)
+    """
+    N = hit_points.shape[0]
+    out = np.zeros(N, dtype=np.float64)
+
+    A = moon_albedo if np.isscalar(moon_albedo) else np.asarray(moon_albedo, dtype=float)
+
+    # Direction to Sun and angular radius of Sun as seen from each point
+    v = sun_pos[None, :] - hit_points
+    d = np.linalg.norm(v, axis=1)
+    s_dir = v / np.maximum(d[:, None], 1e-15)
+
+    # Sun angular radius alpha (rad). Clamp to avoid asin domain errors.
+    alpha = np.arcsin(np.clip(float(sun_radius_km) / np.maximum(d, 1e-9), 0.0, 1.0))
+    sin_alpha = np.sin(alpha)
+
+    radial = _normalize(hit_points - moon_center[None, :])
+    dotc = np.einsum("ij,ij->i", radial, s_dir)
+
+    # Full disk visible vs none vs partial (geometric criterion)
+    full = dotc >= sin_alpha
+    none = dotc <= -sin_alpha
+    partial = ~(full | none)
+
+    if np.any(full):
+        mu0 = np.maximum(0.0, np.einsum("ij,ij->i", normals[full], s_dir[full]))
+        if np.isscalar(moon_albedo):
+            out[full] = float(moon_albedo) * mu0
+        else:
+            out[full] = A[full] * mu0
+
+    if np.any(partial):
+        sampler = EarthDiskSampler.create(int(n_samples))
+        idxs = np.where(partial)[0]
+        for k in idxs:
+            # sample directions across solar disk centred on s_dir[k]
+            omega, _w = sampler.directions(s_dir[k], float(alpha[k]))
+
+            # horizon mask (mean-sphere): above local tangent plane
+            vis = (omega @ radial[k]) > 0.0
+
+            # Lambert cosine, clamped, times visibility
+            mu0k = np.maximum(0.0, omega @ normals[k]) * vis.astype(float)
+
+            # average over full disk solid angle (uniform radiance disk)
+            mu0_eff = float(mu0k.mean())
+
+            if np.isscalar(moon_albedo):
+                out[k] = float(moon_albedo) * mu0_eff
+            else:
+                out[k] = float(A[k]) * mu0_eff
+
+    # 'none' remain 0
+    return out
+
 
 def earthlight_if_tilecached(
     hit_points: np.ndarray,

@@ -1,0 +1,33 @@
+PATCH14 (v0.1.1): Lunar orography via LOLA DEM (LDEM_16) heightfield
+
+What you get:
+- Optional lunar DEM support for the Moon surface:
+  - DEM-driven per-ray intersection refinement (iterative local sphere radius)
+  - DEM-derived surface normals (finite-difference) for Lambert shading
+  - Two new cube layers: ELEV_M (metres) and SLOPDEG (degrees)
+
+Files changed/added:
+- synthmoon/run_v0.py        (DEM load + refinement + new layers)
+- synthmoon/intersect.py     (new ray_sphere_intersect_varradius)
+- synthmoon/albedo_maps.py   (new EquirectMap.sample_bilinear)
+- synthmoon/moon_dem.py      (new module)
+
+How to enable in scene.toml:
+
+[moon]
+dem_fits = "DATA/moon_dem_lola_ldem16_m.fits"
+dem_lon_mode = "0_360"
+dem_units = "m"
+dem_scale = 1.0
+dem_refine_iter = 3
+
+(Keep your LROC albedo map lines as before.)
+
+Sanity checks:
+- In DS9, browse cube layers and confirm ELEV_M and SLOPDEG are non-zero on the lunar disk.
+- If relief looks subtle, set dem_scale=3.0 temporarily, rerun, then set back to 1.0.
+
+Notes:
+- This is NOT terrain self-shadowing yet; it changes intersection depth + surface normals (slope lighting).
+- DEM values are treated as ABSOLUTE radius from Moon centre. Your LDEM_16 conversion produces that (offset ~1737400 m).
+

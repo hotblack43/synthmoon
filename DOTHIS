@@ -1,0 +1,1 @@
+uv run python -m synthmoon.run_v0 --config scene.toml

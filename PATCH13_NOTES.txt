@@ -1,0 +1,42 @@
+PATCH13: Lunar orography (LOLA LDEM) support (v0.1.1)
+
+What you get
+------------
+1) Optional lunar DEM (orography) that affects:
+   - hit-point radius (small shift along ray)
+   - surface normals (slope changes the Lambert term)
+2) New output layers (in the cube):
+   - DEM_M     : DEM height in metres (0 for off-disk)
+   - SLOPDEG   : slope angle in degrees (0 for off-disk)
+
+Important caveats (v0.1.x)
+--------------------------
+- This is NOT a full ray/mesh intersection with detailed terrain self-shadowing.
+  It is a "heightfield on a sphere" with a few Newton-like refinements along each ray
+  + normal derived from DEM gradients. This is the right *modular* stepping stone.
+- DEM is assumed to be equirectangular (simple cylindrical) global coverage.
+
+How to use
+----------
+1) Apply patch:
+   unzip -o synthmoon_v0_patch13.zip -d .
+
+2) Download/convert a LOLA DEM (choose ppd=16 for more detail; ppd=4 is tiny + quick):
+   uv run python scripts/download_lola_ldem_dem.py --ppd 16
+
+   This writes e.g.:
+     DATA/moon_dem_lola_ldem16_m_int16.fits
+
+3) Enable DEM in scene.toml:
+   [moon]
+   dem_fits = "DATA/moon_dem_lola_ldem16_m_int16.fits"
+   dem_lon_mode = "0_360"        # LOLA cylindrical IMG products are 0..360E longitudes
+   dem_units = "m"               # metres
+   dem_scale = 1.0               # multiply DEM by this factor (handy for tests)
+
+4) Run:
+   PYTHONPATH=$PWD uv run python -m synthmoon.run_v0 --config scene.toml
+
+Quick sanity test
+-----------------
+After rendering, you should see DEM_M and SLOPDEG layers in DS9's cube slider.

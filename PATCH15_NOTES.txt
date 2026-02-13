@@ -1,0 +1,4 @@
+PATCH15 fixes PATCH14:
+- run_v0.py: fixes indentation/NameError, and makes DEM relief scaling physical.
+- albedo_maps.py: fixes sample_bilinear as a proper EquirectMap method.
+Also recommends deleting any accidentally-unzipped __pycache__/*.pyc files.

@@ -35,6 +35,16 @@ brdf = "lambert"     # later: "hapke"
 albedo_map_fits = "DATA/moon_albedo_lroc_wac643_016ppd_mean0p12.fits"
 albedo_map_lon_mode = "-180_180"
 albedo_map_scale = 1.0
+dem_fits = "DATA/moon_dem_lola_ldem16_m.fits"
+dem_lon_mode = "0_360"
+dem_units = "m"
+dem_scale = 1.0
+dem_refine_iter = 3
+
+[sun]
+extended_disk = true
+disk_samples = 64
+radius_km = 695700.0
 
 [earth]
 albedo = 0.30

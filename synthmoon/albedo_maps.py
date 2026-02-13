@@ -28,7 +28,7 @@ class EquirectMap:
         path = Path(path)
         arr = fits.getdata(path).astype(np.float64)
         if arr.ndim != 2:
-            raise ValueError(f"Albedo map must be 2D; got shape {arr.shape} from {path}")
+            raise ValueError(f"Map must be 2D; got shape {arr.shape} from {path}")
         if lon_mode not in ("0_360", "-180_180"):
             raise ValueError("lon_mode must be '0_360' or '-180_180'")
         return EquirectMap(data=arr, lon_mode=lon_mode, fill=float(fill))
@@ -61,6 +61,51 @@ class EquirectMap:
         yi = np.clip(np.floor(y).astype(int), 0, nlat - 1)
 
         out = self.data[yi, xi]
+        out = np.where(np.isfinite(out), out, self.fill)
+        return out
+
+    def sample_bilinear(self, lon_deg: np.ndarray, lat_deg: np.ndarray) -> np.ndarray:
+        """
+        Bilinear sampling (smoother than nearest-neighbour).
+
+        - longitude wraps (periodic)
+        - latitude clamps at poles
+        """
+        lon = np.asarray(lon_deg, dtype=np.float64)
+        lat = np.asarray(lat_deg, dtype=np.float64)
+
+        nlat, nlon = self.data.shape
+
+        # Wrap longitudes into the expected domain
+        if self.lon_mode == "0_360":
+            lonw = np.mod(lon, 360.0)
+            x = lonw / 360.0 * nlon
+        else:
+            lonw = ((lon + 180.0) % 360.0) - 180.0
+            x = (lonw + 180.0) / 360.0 * nlon
+
+        latc = np.clip(lat, -90.0, 90.0)
+        y = (90.0 - latc) / 180.0 * nlat
+
+        # wrap x into [0,nlon)
+        x = np.mod(x, nlon)
+        # clamp y into [0,nlat-1-eps]
+        y = np.clip(y, 0.0, np.nextafter(float(nlat - 1), 0.0))
+
+        x0 = np.floor(x).astype(int)
+        y0 = np.floor(y).astype(int)
+        x1 = (x0 + 1) % nlon
+        y1 = np.minimum(y0 + 1, nlat - 1)
+
+        dx = x - x0
+        dy = y - y0
+
+        v00 = self.data[y0, x0]
+        v10 = self.data[y0, x1]
+        v01 = self.data[y1, x0]
+        v11 = self.data[y1, x1]
+
+        out = (1.0 - dx) * (1.0 - dy) * v00 + dx * (1.0 - dy) * v10 + (1.0 - dx) * dy * v01 + dx * dy * v11
         out = np.where(np.isfinite(out), out, self.fill)
         return out
 
