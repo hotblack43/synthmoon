@@ -1,0 +1,51 @@
+[time]
+utc = "2026-02-13T03:12:45Z"
+
+[observer]
+mode = "earth_site"  # "earth_site" | "spacecraft_state"
+lon_deg = 12.5683
+lat_deg = 55.6761
+height_m = 20.0
+# If spacecraft_state:
+# frame = "J2000"
+# x_km = 0.0
+# y_km = 0.0
+# z_km = 0.0
+# vx_km_s = 0.0
+# vy_km_s = 0.0
+# vz_km_s = 0.0
+
+[camera]
+nx = 512
+ny = 512
+fov_deg = 1.0
+roll_deg = 0.0
+pointing = "moon_center"  # later: explicit RA/Dec, etc.
+
+[paths]
+spice_kernels_dir = "KERNELS"
+moon_dem = "DATA/moon_lola_dem.tif"
+moon_albedo = "DATA/moon_albedo.tif"
+earth_albedo = "DATA/earth_albedo.tif"
+out_fits = "OUTPUT/synth_moon.fits"
+
+[moon]
+shape = "sphere_plus_dem"  # later: "mesh"
+brdf = "lambert"           # later: "hapke"
+
+[earth]
+brdf = "lambert"
+earth_disk_samples = 192
+earthlight_tile_px = 16
+
+[illumination]
+include_sun = true
+include_earthlight = true
+
+[shadows]
+mode = "simple"            # later: "horizon" | "raycast_mesh"
+
+[output]
+store_int16 = true
+bunit = "I/F"              # or "W m-2 sr-1" later
+store_float_extension = true
