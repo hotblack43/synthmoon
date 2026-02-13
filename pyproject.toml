@@ -8,6 +8,7 @@ dependencies = [
   "astropy>=5.0",
   "spiceypy>=6.0",
   "pillow>=10.0",
+  "matplotlib>=3.10.8",
 ]
 
 [project.scripts]
