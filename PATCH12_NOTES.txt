@@ -1,0 +1,31 @@
+PATCH12 (v0.1.0): Add LROC-based lunar albedo map downloader+converter, bump version to 0.1.0.
+
+What this patch does
+- Bumps project version: 0.0.1 -> 0.1.0
+- Adds dependency: pillow (to read the LROC GeoTIFF)
+- Adds script: scripts/download_lroc_wac_albedo_map.py
+  Downloads the LROC WAC Global Morphologic Map (643 nm) at 16 px/deg (small ~16 MB TIFF),
+  converts it to an equirectangular FITS albedo map (Float32) in DATA/, scaled to a target mean.
+- Adds synthmoon.__version__ for provenance.
+
+How to use (typical)
+1) Apply patch
+   unzip -o synthmoon_v0_patch12.zip -d .
+
+2) Update env (new dependency)
+   uv sync
+
+3) Download + convert the lunar map
+   uv run python scripts/download_lroc_wac_albedo_map.py
+
+4) In scene.toml, enable it:
+   [moon]
+   albedo = 0.12
+   albedo_map_fits = "DATA/moon_albedo_lroc_wac643_016ppd_mean0p12.fits"
+   albedo_map_lon_mode = "-180_180"
+   albedo_map_scale = 1.0
+
+Notes
+- This LROC product is a *photometrically corrected* 643 nm mosaic intended as a basemap.
+  We use it as a *proxy* for spatial variations in single-scattering albedo (SSA) in v0.1.
+  When we implement Hapke later, this same map can be interpreted as SSA more directly.

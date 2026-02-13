@@ -32,6 +32,9 @@ out_fits = "OUTPUT/synth_moon_v0.fits"
 albedo = 0.12
 radius_km = 1737.4
 brdf = "lambert"     # later: "hapke"
+albedo_map_fits = "DATA/moon_albedo_lroc_wac643_016ppd_mean0p12.fits"
+albedo_map_lon_mode = "-180_180"
+albedo_map_scale = 1.0
 
 [earth]
 albedo = 0.30

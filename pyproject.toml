@@ -1,12 +1,13 @@
 [project]
 name = "synthmoon"
-version = "0.0.1"
-description = "Synthetic lunar images with sunlight and earthlight (v0)."
+version = "0.1.0"
+description = "Synthetic lunar images with sunlight and earthlight (v0.1)."
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.23",
   "astropy>=5.0",
   "spiceypy>=6.0",
+  "pillow>=10.0",
 ]
 
 [project.scripts]
