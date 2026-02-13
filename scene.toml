@@ -1,0 +1,54 @@
+[time]
+utc = "2026-02-13T03:12:45Z"
+
+[observer]
+mode = "earth_site"  # "earth_site" | "spacecraft_state"
+lon_deg = 12.5683
+lat_deg = 55.6761
+height_m = 20.0
+# If spacecraft_state:
+# frame = "J2000"
+# x_km = 0.0
+# y_km = 0.0
+# z_km = 0.0
+# vx_km_s = 0.0
+# vy_km_s = 0.0
+# vz_km_s = 0.0
+
+[camera]
+nx = 512
+ny = 512
+fov_deg = 1.0
+roll_deg = 0.0
+pointing = "moon_center"  # v0 supports only moon_center
+
+[paths]
+spice_kernels_dir = "KERNELS"
+meta_kernel = "KERNELS/generic.tm"
+out_fits = "OUTPUT/synth_moon_v0.fits"
+
+[moon]
+# v0: constant albedo, sphere-only surface (DEM hook exists but returns 0)
+albedo = 0.12
+radius_km = 1737.4
+brdf = "lambert"     # later: "hapke"
+
+[earth]
+albedo = 0.30
+radius_km = 6378.1366
+brdf = "lambert"
+earth_disk_samples = 192
+earthlight_tile_px = 16
+
+[illumination]
+include_sun = true
+include_earthlight = true
+
+[shadows]
+mode = "simple"      # v0: "simple" only
+
+[output]
+store_int16 = true
+store_float_extension = true
+bunit = "I/F_moon"   # I/F normalised to solar irradiance at the lunar point
+scale_mode = "full_range"  # "full_range" only in v0
