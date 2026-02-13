@@ -17,8 +17,14 @@ from .spice_tools import (
 )
 from .camera import camera_basis_from_boresight_and_up, pixel_rays, moon_roi_bbox
 from .intersect import ray_sphere_intersect
-from .illumination import lambert_sun_if, earthlight_if_tilecached
+from .illumination import lambert_sun_if, earthlight_if_tilecached, _normalize
 from .fits_io import write_fits
+
+
+def _short(s: str, n: int = 68) -> str:
+    if len(s) <= n:
+        return s
+    return "…" + s[-(n - 1):]
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -37,14 +43,13 @@ def main(argv: list[str] | None = None) -> None:
     # Body states (SSB origin) in J2000
     states = get_sun_earth_moon_states_ssb(et)
     sun_pos = states["SUN"][:3]
-    earth_state_ssb = states["EARTH"]       # (6,)
+    earth_state_ssb = states["EARTH"]
     earth_pos = earth_state_ssb[:3]
     moon_pos = states["MOON"][:3]
 
-    # Observer state in J2000 with SSB origin
+    # Observer state in SAME origin (SSB)
     obs_cfg = cfg.observer
     if cfg.observer_mode == "earth_site":
-        # site state is Earth-centered J2000; offset to SSB by adding Earth's SSB state
         obs_state_ec = earth_site_state_j2000_earthcenter(
             et,
             float(obs_cfg["lon_deg"]),
@@ -64,7 +69,6 @@ def main(argv: list[str] | None = None) -> None:
     dist_om = float(np.linalg.norm(boresight))
     boresight_u = boresight / dist_om
 
-    # Lunar north vector used as up-hint
     north = lunar_north_in_j2000(et)
     R = camera_basis_from_boresight_and_up(boresight_u, north, float(cfg.camera.get("roll_deg", 0.0)))
 
@@ -72,10 +76,8 @@ def main(argv: list[str] | None = None) -> None:
     ny = int(cfg.camera.get("ny", 512))
     fov_deg = float(cfg.camera.get("fov_deg", 1.0))
 
-    # Moon angular radius as seen from observer
     Rm = float(cfg.moon.get("radius_km", 1737.4))
     moon_ang_radius_deg = np.rad2deg(np.arcsin(np.clip(Rm / dist_om, 0.0, 1.0)))
-
     bbox = moon_roi_bbox(nx, ny, boresight_u, moon_ang_radius_deg, fov_deg, margin_px=12)
 
     ij, dirs = pixel_rays(nx, ny, fov_deg, R, bbox)
@@ -83,7 +85,12 @@ def main(argv: list[str] | None = None) -> None:
 
     hit, t = ray_sphere_intersect(origins, dirs, moon_pos, Rm)
 
-    img = np.zeros((ny, nx), dtype=np.float32)
+    # output images
+    img_total = np.zeros((ny, nx), dtype=np.float32)
+    img_sun = np.zeros((ny, nx), dtype=np.float32)
+    img_earth = np.zeros((ny, nx), dtype=np.float32)
+    img_mu_earth = np.zeros((ny, nx), dtype=np.float32)
+    img_mu_sun = np.zeros((ny, nx), dtype=np.float32)
 
     if np.any(hit):
         ij_hit = ij[hit]
@@ -96,10 +103,21 @@ def main(argv: list[str] | None = None) -> None:
         normals /= np.linalg.norm(normals, axis=1, keepdims=True)
 
         moon_albedo = float(cfg.moon.get("albedo", 0.12))
-        out_if = np.zeros(pts.shape[0], dtype=np.float32)
+
+        # Diagnostics: cosine to Earth center and Sun
+        e_dir = _normalize(earth_pos[None, :] - pts)
+        s_dir = _normalize(sun_pos[None, :] - pts)
+        muE = np.maximum(0.0, np.sum(normals * e_dir, axis=1)).astype(np.float32)
+        muS = np.maximum(0.0, np.sum(normals * s_dir, axis=1)).astype(np.float32)
+        img_mu_earth[ij_hit[:, 1], ij_hit[:, 0]] = muE
+        img_mu_sun[ij_hit[:, 1], ij_hit[:, 0]] = muS
+
+        out_total = np.zeros(pts.shape[0], dtype=np.float32)
 
         if bool(cfg.illumination.get("include_sun", True)):
-            out_if += lambert_sun_if(pts, normals, sun_pos, moon_albedo).astype(np.float32)
+            sun_if = lambert_sun_if(pts, normals, sun_pos, moon_albedo).astype(np.float32)
+            img_sun[ij_hit[:, 1], ij_hit[:, 0]] = sun_if
+            out_total += sun_if
 
         if bool(cfg.illumination.get("include_earthlight", True)):
             earth_albedo = float(cfg.earth.get("albedo", 0.30))
@@ -107,7 +125,7 @@ def main(argv: list[str] | None = None) -> None:
             n_samples = int(cfg.earth.get("earth_disk_samples", 192))
             tile_px = int(cfg.earth.get("earthlight_tile_px", 16))
 
-            out_if += earthlight_if_tilecached(
+            earth_if = earthlight_if_tilecached(
                 hit_points=pts,
                 normals=normals,
                 moon_center=moon_pos,
@@ -121,67 +139,83 @@ def main(argv: list[str] | None = None) -> None:
                 ij=ij_hit,
                 nx=nx,
                 ny=ny,
-            )
+            ).astype(np.float32)
 
-        img[ij_hit[:, 1], ij_hit[:, 0]] = out_if
+            img_earth[ij_hit[:, 1], ij_hit[:, 0]] = earth_if
+            out_total += earth_if
+
+        img_total[ij_hit[:, 1], ij_hit[:, 0]] = out_total
     else:
-        print("No Moon intersections found. (After this fix, that would be unusual; check time/site/FOV.)")
+        print("No Moon intersections found. Check UTC/site/FOV.")
 
-    # FITS header (v0)
     jd = Time(utc, format="isot", scale="utc").jd
     jd_str = f"{jd:15.7f}"
 
     dist_me = float(np.linalg.norm(earth_pos - moon_pos))
     earth_ang_diam = np.rad2deg(2.0 * np.arcsin(np.clip(float(cfg.earth.get("radius_km", 6378.1366)) / dist_me, 0.0, 1.0)))
 
-    v1 = (sun_pos - moon_pos); v1 /= np.linalg.norm(v1)
-    v2 = (obs_pos - moon_pos); v2 /= np.linalg.norm(v2)
+    v1 = (sun_pos - moon_pos)
+    v1 /= np.linalg.norm(v1)
+    v2 = (obs_pos - moon_pos)
+    v2 /= np.linalg.norm(v2)
     phase = np.rad2deg(np.arccos(np.clip(float(np.dot(v1, v2)), -1.0, 1.0)))
 
     kernels = list_loaded_kernels()
 
     header_cards = {
-        "DATE-OBS": (utc, "UTC exposure start (single timestamp per image)"),
-        "JD-OBS": (jd_str, "Julian Date (UTC) exposure start, f15.7"),
-        "BUNIT": (str(cfg.output.get("bunit", "I/F_moon")), "Image units"),
-        "FOV_DEG": (fov_deg, "Square field of view in degrees"),
-        "OBSMODE": (cfg.observer_mode, "Observer specification mode"),
-        "OBSLON": (float(obs_cfg.get("lon_deg", 0.0)), "Observer longitude (deg), if earth_site"),
-        "OBSLAT": (float(obs_cfg.get("lat_deg", 0.0)), "Observer latitude (deg), if earth_site"),
-        "OBSHGT": (float(obs_cfg.get("height_m", 0.0)), "Observer height (m), if earth_site"),
-        "MOONRAD": (float(cfg.moon.get("radius_km", 1737.4)), "Moon radius used (km)"),
-        "EARTRAD": (float(cfg.earth.get("radius_km", 6378.1366)), "Earth radius used (km)"),
-        "ALBMOON": (float(cfg.moon.get("albedo", 0.12)), "Moon Lambert albedo (v0 constant)"),
-        "ALBEARTH": (float(cfg.earth.get("albedo", 0.30)), "Earth Lambert albedo (v0 constant)"),
-        "EDSAMP": (int(cfg.earth.get("earth_disk_samples", 192)), "Earth disk samples per tile"),
-        "TILEPX": (int(cfg.earth.get("earthlight_tile_px", 16)), "Tile size for earthlight caching (px)"),
-        "INCSUN": (int(bool(cfg.illumination.get("include_sun", True))), "Include direct sunlight term (0/1)"),
-        "INCEARTH": (int(bool(cfg.illumination.get("include_earthlight", True))), "Include earthlight term (0/1)"),
-        "DIST_OM": (dist_om, "Observer->Moon distance (km)"),
-        "DIST_ME": (dist_me, "Moon->Earth distance (km)"),
-        "EANGDIA": (earth_ang_diam, "Earth angular diameter from Moon centre (deg)"),
-        "MPHASE": (phase, "Moon phase angle at Moon (deg)"),
-        "MKFILE": (str(Path(mk)), "Meta-kernel path loaded via SPICE"),
-        "KCOUNT": (len(kernels), "Number of SPICE kernels loaded"),
+        "DATE-OBS": (utc, "UTC"),
+        "JD-OBS": (jd_str, "JD f15.7"),
+        "BUNIT": (str(cfg.output.get("bunit", "I/F_moon")), "Units"),
+        "FOV_DEG": (fov_deg, "FOV deg"),
+        "OBSMODE": (cfg.observer_mode, "Obs mode"),
+        "OBSLON": (float(obs_cfg.get("lon_deg", 0.0)), "Lon deg"),
+        "OBSLAT": (float(obs_cfg.get("lat_deg", 0.0)), "Lat deg"),
+        "OBSHGT": (float(obs_cfg.get("height_m", 0.0)), "Hgt m"),
+        "MOONRAD": (float(cfg.moon.get("radius_km", 1737.4)), "Moon km"),
+        "EARTRAD": (float(cfg.earth.get("radius_km", 6378.1366)), "Earth km"),
+        "ALBMOON": (float(cfg.moon.get("albedo", 0.12)), "A moon"),
+        "ALBEARTH": (float(cfg.earth.get("albedo", 0.30)), "A earth"),
+        "EDSAMP": (int(cfg.earth.get("earth_disk_samples", 192)), "E samp"),
+        "TILEPX": (int(cfg.earth.get("earthlight_tile_px", 16)), "Tile px"),
+        "INCSUN": (int(bool(cfg.illumination.get("include_sun", True))), "Sun 0/1"),
+        "INCEARTH": (int(bool(cfg.illumination.get("include_earthlight", True))), "Earth 0/1"),
+        "DIST_OM": (dist_om, "Obs-Moon"),
+        "DIST_ME": (dist_me, "Moon-Earth"),
+        "EANGDIA": (earth_ang_diam, "E dia deg"),
+        "MPHASE": (phase, "Phase deg"),
+        "MKFILE": (Path(mk).name, "MK"),
+        "KCOUNT": (len(kernels), "K n"),
     }
 
     out_path = cfg.paths.get("out_fits", "OUTPUT/synth_moon_v0.fits")
 
+    primary_dtype = str(cfg.output.get("primary_dtype", "float32"))
+    prim_scaled = bool(cfg.output.get("primary_scaled_0_65535", True))
+    store_raw_ext = bool(cfg.output.get("store_raw_extension", True))
+
+    extra = {
+        "SUNIF": img_sun,
+        "EARTHIF": img_earth,
+        "MU_EARTH": img_mu_earth,
+        "MU_SUN": img_mu_sun,
+    }
+
     write_fits(
         out_path=out_path,
-        img_float=img,
+        img_raw_float=img_total,
         header_cards=header_cards,
-        store_int16=bool(cfg.output.get("store_int16", True)),
-        store_float_extension=bool(cfg.output.get("store_float_extension", True)),
+        primary_dtype=primary_dtype,
+        primary_scaled_0_65535=prim_scaled,
+        store_raw_extension=store_raw_ext,
+        extra_images=extra,
     )
 
-    # Append HISTORY cards with kernel list
     from astropy.io import fits
     with fits.open(out_path, mode="update") as hdul:
         hdr = hdul[0].header
         hdr.add_history("Loaded SPICE kernels:")
         for k in kernels:
-            hdr.add_history(str(k))
+            hdr.add_history(_short(str(k)))
         hdul.flush()
 
     print(f"Wrote: {out_path}")

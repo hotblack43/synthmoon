@@ -1,0 +1,24 @@
+PATCH4 NOTES
+
+Key point:
+- FITS BITPIX=16 means *signed* 16-bit integers (DS9 shows -32768..+32767).
+- Floating point images must have BITPIX=-32 (float32) or BITPIX=-64 (float64).
+
+This patch makes the output:
+- Primary HDU: FLOAT (BITPIX=-32 by default), scaled so values lie in 0.0..65535.0 (still float).
+- RAW32/RAW64 extension: unscaled physical float values (recommended for analysis).
+
+Optional scene.toml keys:
+  [output]
+  primary_dtype = "float32"        # or "float64" (then BITPIX=-64)
+  primary_scaled_0_65535 = true
+  store_raw_extension = true
+
+Apply:
+  unzip -o synthmoon_v0_patch4.zip -d .
+
+Run:
+  uv run python -m synthmoon.run_v0 --config scene.toml
+
+Verify:
+  uv run python -c "from astropy.io import fits; h=fits.getheader('OUTPUT/synth_moon_v0.fits'); d=fits.getdata('OUTPUT/synth_moon_v0.fits'); print('BITPIX',h['BITPIX'],'dtype',d.dtype,'min',float(d.min()),'max',float(d.max()))"

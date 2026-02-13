@@ -1,0 +1,20 @@
+PATCH7: Debug planes to diagnose the 'concentric circle' on the earthlit dark side.
+
+Adds FITS extensions:
+  - SUNIF     : direct solar term (Lambert) on the Moon
+  - EARTHIF   : earthlight term (Lambert Earth, sampled disk)
+  - MU_EARTH  : cos(incidence) = n · e_dir (Earth-centre direction)
+  - MU_SUN    : cos(incidence) = n · s_dir (Sun direction)
+
+Apply:
+  cd ~/WORKSHOP/SYNTHMOON
+  unzip -o synthmoon_v0_patch7.zip -d .
+  uv run python -m synthmoon.run_v0 --config scene.toml
+
+Inspect in DS9:
+  ds9 'OUTPUT/synth_moon_v0.fits[EARTHIF]' &
+  ds9 'OUTPUT/synth_moon_v0.fits[MU_EARTH]' &
+
+Interpretation:
+- If the 'circle' is also visible in MU_EARTH, it's not a bug: it's the expected Lambert cosine fall-off for illumination from Earth's direction on a spherical Moon.
+- If the 'circle' appears in EARTHIF but NOT in MU_EARTH, it's an integration/visibility/caching artefact in earthlight.

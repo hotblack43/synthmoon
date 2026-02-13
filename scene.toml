@@ -38,7 +38,7 @@ albedo = 0.30
 radius_km = 6378.1366
 brdf = "lambert"
 earth_disk_samples = 192
-earthlight_tile_px = 16
+earthlight_tile_px = 1
 
 [illumination]
 include_sun = true
