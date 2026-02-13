@@ -1,12 +1,12 @@
-.nc
-.fits
-.bsp
-.zip
-
-# --- synthmoon: downloaded/generated data (do not commit) ---
+# --- synthmoon: do not commit downloaded/generated data ---
 OUTPUT/
 DATA/LROC/
 DATA/moon_albedo_*.fits
 *.tif
 *.tiff
 synthmoon_v0_patch*.zip
+
+# uv / python
+.venv/
+__pycache__/
+*.pyc
