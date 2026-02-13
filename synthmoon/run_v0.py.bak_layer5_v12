@@ -506,15 +506,15 @@ def main(argv: list[str] | None = None) -> None:
     }
 
 
-    # If requested, write ONLY layer 5 (1-based) from the ordered 'layers' dict.
-    # In this file's current ordering, layer 5 is whatever the 5th key in layers.keys() is.
-    if args.layer5_only:
-        _keys = list(layers.keys())
-        if len(_keys) < 5:
-            raise ValueError(f"--layer5-only requested, but only {len(_keys)} layer(s) exist.")
-        k5 = _keys[4]
-        layers = {k5: layers[k5]}
-
+        # If requested, write ONLY layer 5 (1-based) from the ordered 'layers' dict.
+        # In this file's current ordering, layer 5 is whatever the 5th key in layers.keys() is.
+        if args.layer5_only:
+            _keys = list(layers.keys())
+            if len(_keys) < 5:
+                raise ValueError(f"--layer5-only requested, but only {len(_keys)} layer(s) exist.")
+            k5 = _keys[4]
+            layers = {k5: layers[k5]}
+    
     write_fits_cube(
         out_path=out_path,
         layers=layers,

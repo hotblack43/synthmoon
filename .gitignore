@@ -5,6 +5,7 @@ DATA/moon_albedo_*.fits
 *.tif
 *.tiff
 synthmoon_v0_patch*.zip
+OLD/
 
 # uv / python
 .venv/

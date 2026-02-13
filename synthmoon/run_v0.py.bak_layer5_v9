@@ -505,16 +505,6 @@ def main(argv: list[str] | None = None) -> None:
         "SLOPDEG":  (img_slope_deg, "slope deg"),
     }
 
-
-    # If requested, write ONLY layer 5 (1-based) from the ordered 'layers' dict.
-    # In this file's current ordering, layer 5 is whatever the 5th key in layers.keys() is.
-    if args.layer5_only:
-        _keys = list(layers.keys())
-        if len(_keys) < 5:
-            raise ValueError(f"--layer5-only requested, but only {len(_keys)} layer(s) exist.")
-        k5 = _keys[4]
-        layers = {k5: layers[k5]}
-
     write_fits_cube(
         out_path=out_path,
         layers=layers,
@@ -526,6 +516,10 @@ def main(argv: list[str] | None = None) -> None:
     )
 
 
+    # Optional: only keep layer 5
+    if args.layer5_only:
+        cube, layer_names = _select_only_layer5(cube, layer_names)
+    print(f"Wrote cube: {out_path}  (layers: {', '.join(layers.keys())})")
 
 
 if __name__ == "__main__":

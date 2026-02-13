@@ -29,37 +29,6 @@ from .albedo_maps import EquirectMap
 from .moon_dem import LunarDEM
 
 
-def _select_only_layer5(cube, layer_names):
-    # Keep only layer 5 (1-based). Returns (cube5, names5).
-    if cube is None:
-        raise ValueError("cube is None")
-    if layer_names is None:
-        layer_names = []
-
-    if getattr(cube, "ndim", None) != 3:
-        raise ValueError(f"Unexpected cube ndim: {getattr(cube, 'ndim', None)} shape={getattr(cube, 'shape', None)}")
-
-    # Support either (ny, nx, nlayers) or (nlayers, ny, nx)
-    if cube.shape[-1] >= 5:
-        axis_last = True
-    elif cube.shape[0] >= 5:
-        axis_last = False
-    else:
-        raise ValueError(f"Requested layer 5, but cube has shape {getattr(cube, 'shape', None)}")
-
-    idx0 = 4  # layer 5 in 0-based indexing
-    if axis_last:
-        cube5 = cube[..., idx0:idx0+1]
-    else:
-        cube5 = cube[idx0:idx0+1, ...]
-
-    if len(layer_names) >= 5:
-        names5 = [layer_names[4]]
-    else:
-        names5 = ["LAYER5"]
-    return cube5, names5
-
-
 def _short(s: str, n: int = 68) -> str:
     if len(s) <= n:
         return s
@@ -135,13 +104,6 @@ def _sun_shadow_mask_dem(
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="synthmoon renderer (v0.x)")
     ap.add_argument("--config", default="scene.toml", help="Path to scene.toml")
-
-    ap.add_argument(
-        "--layer5-only",
-        action="store_true",
-        help="Write only layer 5 (1-based) to the FITS cube (default writes all layers).",
-    )
-
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -505,16 +467,6 @@ def main(argv: list[str] | None = None) -> None:
         "SLOPDEG":  (img_slope_deg, "slope deg"),
     }
 
-
-    # If requested, write ONLY layer 5 (1-based) from the ordered 'layers' dict.
-    # In this file's current ordering, layer 5 is whatever the 5th key in layers.keys() is.
-    if args.layer5_only:
-        _keys = list(layers.keys())
-        if len(_keys) < 5:
-            raise ValueError(f"--layer5-only requested, but only {len(_keys)} layer(s) exist.")
-        k5 = _keys[4]
-        layers = {k5: layers[k5]}
-
     write_fits_cube(
         out_path=out_path,
         layers=layers,
@@ -525,7 +477,7 @@ def main(argv: list[str] | None = None) -> None:
         meta_kernel_sha256_prefix=mk_hash,
     )
 
-
+    print(f"Wrote cube: {out_path}  (layers: {', '.join(layers.keys())})")
 
 
 if __name__ == "__main__":
