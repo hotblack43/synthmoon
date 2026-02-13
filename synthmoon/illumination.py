@@ -167,6 +167,10 @@ def earthlight_if_tilecached(
     earth_land_albedo: float = 0.25,
     earth_cloud_amount: float = 0.0,
     earth_cloud_albedo: float = 0.6,
+    earth_map_interp: str = "nearest",
+    ocean_glint_strength: float = 0.0,
+    ocean_glint_sigma_deg: float = 6.0,
+    ocean_glint_threshold: float = 0.12,
 ) -> np.ndarray:
     """
     Earthlight with partial-disk visibility near the lunar horizon + optional map-based Earth albedo.
@@ -232,23 +236,39 @@ def earthlight_if_tilecached(
 
         # Base albedo for Earth patches
         if earth_map is not None:
-            A_E = earth_map.sample(lon, lat)
+            A_E = earth_map.sample_interp(lon, lat, interp=str(earth_map_interp))
         else:
             A_E = toy_land_ocean_albedo(lon, lat, ocean=earth_ocean_albedo, land=earth_land_albedo)
 
-        if earth_cloud_amount > 0.0:
-            A_E = apply_simple_clouds(A_E, lon, lat, cloud_amount=earth_cloud_amount, cloud_albedo=earth_cloud_albedo)
-
-        # Clamp and allow a global multiplier via earth_albedo (acts as a scale)
-        A_E = np.clip(A_E, 0.0, 1.0) * float(earth_albedo)
+        omega_hit = omega[hitE]
 
         # Sun illumination at Earth patch (Earth phases)
         sE = _normalize(sun_pos[None, :] - pE)
         mu0E = np.maximum(0.0, np.sum(nE * sE, axis=1))
 
         # Patch must face the Moon: direction from patch to Moon is -omega
-        omega_hit = omega[hitE]
         muE = np.maximum(0.0, np.sum(nE * (-omega_hit), axis=1))
+
+        # Optional ocean glint (simple specular lobe around the mirror direction).
+        # This is a deliberately lightweight approximation (not Cox--Munk).
+        glint_strength = float(ocean_glint_strength)
+        if glint_strength > 0.0:
+            sigma_deg = float(ocean_glint_sigma_deg)
+            sigma = np.deg2rad(max(sigma_deg, 0.1))
+            ocean_thresh = float(ocean_glint_threshold)
+            ocean = (A_E < ocean_thresh) & (mu0E > 0.0) & (muE > 0.0)
+            if np.any(ocean):
+                h = _normalize(sE + (-omega_hit))
+                cos_th = np.clip(np.sum(nE * h, axis=1), -1.0, 1.0)
+                theta = np.arccos(cos_th)
+                glint = glint_strength * np.exp(- (theta / sigma) ** 2)
+                A_E = A_E + glint * ocean.astype(float)
+
+        if earth_cloud_amount > 0.0:
+            A_E = apply_simple_clouds(A_E, lon, lat, cloud_amount=earth_cloud_amount, cloud_albedo=earth_cloud_albedo)
+
+        # Clamp and allow a global multiplier via earth_albedo (acts as a scale)
+        A_E = np.clip(A_E, 0.0, 1.0) * float(earth_albedo)
 
         # Solar irradiance at Earth patch (F(1 AU)=1)
         F_E = np.array([inv_solar_irradiance_scale(pE[i], sun_pos) for i in range(pE.shape[0])], dtype=float)

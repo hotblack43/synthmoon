@@ -9,6 +9,7 @@ import spiceypy as sp
 from .config import load_config
 from .spice_tools import (
     load_kernels,
+    load_optional_moon_frame_kernels,
     utc_to_et,
     earth_site_state_j2000_earthcenter,
     spacecraft_state_j2000,
@@ -17,6 +18,8 @@ from .spice_tools import (
     list_loaded_kernels,
     inv_solar_irradiance_scale,
     resolve_moon_frame,
+    available_moon_frames,
+    sha256_prefix,
 )
 from .camera import camera_basis_from_boresight_and_up, pixel_rays, moon_roi_bbox
 from .intersect import ray_sphere_intersect, ray_sphere_intersect_varradius
@@ -43,6 +46,61 @@ def _moon_lonlat_deg(et: float, moon_center_j2000: np.ndarray, pts_j2000: np.nda
     return lon, lat
 
 
+def _sun_shadow_mask_dem(
+    et: float,
+    moon_pos_j2000: np.ndarray,
+    pts_j2000: np.ndarray,
+    normals_j2000: np.ndarray,
+    sun_pos_j2000: np.ndarray,
+    moon_dem: "LunarDEM",
+    moon_frame: str,
+    mean_radius_km: float,
+    dem_scale: float,
+    refine_iter: int = 3,
+) -> np.ndarray:
+    """Return a boolean mask (len N) for points shadowed from the Sun
+    by the sphere+DEM shape model.
+
+    Notes
+    -----
+    - This implements hard shadows for a point-source Sun.
+    - For extended-Sun penumbra, we currently fall back to the mean-sphere model.
+    """
+    if pts_j2000.size == 0:
+        return np.zeros((0,), dtype=bool)
+
+    # Move the ray origin a small distance above the surface to avoid self-intersection.
+    eps_km = 1e-3  # 1 m
+    origins = pts_j2000 + eps_km * normals_j2000
+    dirs = normalize(sun_pos_j2000 - pts_j2000)
+
+    # Conservative outer envelope: mean radius scaled up to the max DEM radius.
+    rmin_km, rmax_km = moon_dem.min_max_radius_km()
+    r_env_km = mean_radius_km + max(0.0, (rmax_km - mean_radius_km) * dem_scale)
+
+    hit_env, t_env = ray_sphere_intersect(origins, dirs, moon_pos_j2000, r_env_km)
+    if not np.any(hit_env):
+        return hit_env
+
+    # Refine against per-ray radius from the DEM at the current hit point.
+    hit = hit_env.copy()
+    t = t_env.copy()
+    for _ in range(int(max(1, refine_iter))):
+        idx = np.where(hit)[0]
+        if idx.size == 0:
+            break
+        pts_hit = origins[idx] + t[idx, None] * dirs[idx]
+        lon, lat = _moon_lonlat_deg(et, moon_pos_j2000, pts_hit, moon_frame=moon_frame)
+        r_dem = moon_dem.radius_km(lon, lat)
+        r_km = mean_radius_km + (r_dem - mean_radius_km) * dem_scale
+        hit_new, t_new = ray_sphere_intersect_varradius(origins[idx], dirs[idx], moon_pos_j2000, r_km)
+        # Update only the rays still hitting.
+        hit[idx] = hit_new
+        t[idx] = t_new
+
+    return hit
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="synthmoon renderer (v0.x)")
     ap.add_argument("--config", default="scene.toml", help="Path to scene.toml")
@@ -50,14 +108,36 @@ def main(argv: list[str] | None = None) -> None:
 
     cfg = load_config(args.config)
 
-    mk = cfg.paths.get("meta_kernel", str(Path(cfg.paths.get("spice_kernels_dir", "KERNELS")) / "generic.tm"))
+    kernels_dir = str(cfg.paths.get("spice_kernels_dir", "KERNELS"))
+    mk = cfg.paths.get("meta_kernel", str(Path(kernels_dir) / "generic.tm"))
     load_kernels(mk)
+
+    # Optional (but important) Moon fixed frames (ME/PA) live in extra FK/BPC kernels.
+    # We load them if present. If enabled, we can also auto-download the tiny "assoc" FK files.
+    auto_fk = bool(cfg.paths.get("auto_download_small_kernels", False) or cfg.moon.get("auto_download_small_fk", False))
+    load_optional_moon_frame_kernels(kernels_dir, auto_download_small_fk=auto_fk)
 
     utc = cfg.utc
     et = utc_to_et(utc)
 
     moon_frame_req = str(cfg.moon.get("spice_frame", "IAU_MOON"))
     moon_frame = resolve_moon_frame(moon_frame_req)
+
+    # Health check: if you requested a high-accuracy frame, do not silently fall back.
+    strict_default = moon_frame_req.upper() not in ("IAU_MOON", "")
+    strict = bool(cfg.moon.get("require_spice_frame", strict_default))
+    if strict and (moon_frame == "IAU_MOON") and (moon_frame_req.upper() not in ("IAU_MOON", "")):
+        avail = available_moon_frames()
+        raise RuntimeError(
+            "Requested moon.spice_frame=%r but that frame is not available.\n"
+            "Loaded Moon frames include: %s\n\n"
+            "Fix: ensure you have these kernels and they are loaded (either via generic.tm or auto-load):\n"
+            "  KERNELS/pck/moon_pa_de440_200625.bpc\n"
+            "  KERNELS/fk/satellites/moon_de440_250416.tf\n"
+            "  KERNELS/fk/satellites/moon_assoc_me.tf\n"
+            "  KERNELS/fk/satellites/moon_assoc_pa.tf\n"
+            "(You already downloaded them once; re-run with paths correct.)\n" % (moon_frame_req, ", ".join(avail))
+        )
     if moon_frame != moon_frame_req:
         print(f"NOTE: Requested moon.spice_frame={moon_frame_req!r} -> using {moon_frame!r} (loaded frames)")
 
@@ -176,7 +256,8 @@ def main(argv: list[str] | None = None) -> None:
 
         # Normals + DEM diagnostics
         if moon_dem is not None:
-            normals, slope_deg = moon_dem.normals_j2000(et, lon, lat, moon_frame=moon_frame)
+            dem_normal = str(cfg.moon.get("dem_normal", "finite_diff"))
+            normals, slope_deg = moon_dem.normals_j2000(et, lon, lat, moon_frame=moon_frame, method=dem_normal)
             elev_m = moon_dem.elevation_m(lon, lat) * dem_scale  # relief-scaled elevation
 
             img_elev_m[ij_hit[:, 1], ij_hit[:, 0]] = elev_m
@@ -191,7 +272,8 @@ def main(argv: list[str] | None = None) -> None:
         if moon_map is not None:
             if lon is None or lat is None:
                 lon, lat = _moon_lonlat_deg(et, moon_pos, pts, moon_frame=moon_frame)
-            A_map = moon_map.sample(lon, lat)
+            interp = str(cfg.moon.get("albedo_map_interp", "nearest"))
+            A_map = moon_map.sample_interp(lon, lat, interp=interp)
             A_scale = float(cfg.moon.get("albedo_map_scale", 1.0))
             A_m = np.clip(A_map * A_scale, 0.0, 1.0)
 
@@ -219,6 +301,29 @@ def main(argv: list[str] | None = None) -> None:
             else:
                 sun_if = lambert_sun_if(pts, normals, sun_pos, A_m).astype(np.float64)
 
+                # Optional hard terrain shadows (DEM) for point-source Sun.
+                shadow_sun = str(cfg.shadows.get("sun", cfg.shadows.get("mode", "simple"))).lower()
+                if shadow_sun in ("dem", "terrain"):
+                    if moon_dem is None:
+                        print("NOTE: shadows.sun='dem' requested but moon.dem_fits is not set; ignoring.")
+                    else:
+                        mask = _sun_shadow_mask_dem(
+                            et=et,
+                            moon_pos_j2000=moon_pos,
+                            pts_j2000=pts,
+                            normals_j2000=normals,
+                            sun_pos_j2000=sun_pos,
+                            moon_dem=moon_dem,
+                            moon_frame=moon_frame,
+                            mean_radius_km=moon_radius,
+                            dem_scale=dem_scale,
+                            refine_iter=max(1, int(cfg.moon.get("dem_refine_iter", 3))),
+                        )
+                        sun_if[mask] = 0.0
+
+            # Note: extended-Sun penumbra currently uses a mean-sphere horizon;
+            # terrain shadowing + finite Sun disk is planned.
+
         if bool(cfg.illumination.get("include_earthlight", True)):
             earth_albedo_scale = float(cfg.earth.get("albedo", 1.0))  # acts as scale
             earth_radius = float(cfg.earth.get("radius_km", 6378.1366))
@@ -245,6 +350,10 @@ def main(argv: list[str] | None = None) -> None:
                 earth_land_albedo=float(cfg.earth.get("land_albedo", 0.25)),
                 earth_cloud_amount=float(cfg.earth.get("cloud_amount", 0.0)),
                 earth_cloud_albedo=float(cfg.earth.get("cloud_albedo", 0.6)),
+                earth_map_interp=str(cfg.earth.get("albedo_map_interp", "nearest")),
+                ocean_glint_strength=float(cfg.earth.get("ocean_glint_strength", 0.0)),
+                ocean_glint_sigma_deg=float(cfg.earth.get("ocean_glint_sigma_deg", 6.0)),
+                ocean_glint_threshold=float(cfg.earth.get("ocean_glint_threshold", 0.12)),
             ).astype(np.float64)
 
         total_if = sun_if + earth_if
@@ -275,6 +384,25 @@ def main(argv: list[str] | None = None) -> None:
     phase = np.rad2deg(np.arccos(np.clip(float(np.dot(v1, v2)), -1.0, 1.0)))
 
     kernels = list_loaded_kernels()
+
+    # Optional kernel manifest for reproducibility
+    kernel_hash_mode = str(cfg.output.get("kernel_manifest_hash", "none")).lower()
+    kernel_manifest = []
+    for k in kernels:
+        try:
+            p = Path(k)
+            nbytes = int(p.stat().st_size) if p.exists() else 0
+            h = sha256_prefix(p, n=16) if kernel_hash_mode in ("sha256", "sha") else ""
+        except Exception:
+            nbytes = 0
+            h = ""
+        kernel_manifest.append((str(k), nbytes, h))
+
+    mk_hash = ""
+    try:
+        mk_hash = sha256_prefix(Path(mk), n=16)
+    except Exception:
+        mk_hash = ""
 
     tsi_1au = float(cfg.output.get("tsi_w_m2", 1361.0))
     fsun_moon = tsi_1au * float(inv_solar_irradiance_scale(moon_pos, sun_pos))
@@ -344,16 +472,10 @@ def main(argv: list[str] | None = None) -> None:
         layers=layers,
         header_cards=header_cards,
         cube_dtype=primary_dtype,
+        kernel_manifest=kernel_manifest,
+        meta_kernel_path=str(mk),
+        meta_kernel_sha256_prefix=mk_hash,
     )
-
-    # Kernel list in HISTORY (keeps header compact)
-    from astropy.io import fits
-    with fits.open(out_path, mode="update") as hdul:
-        hdr = hdul[0].header
-        hdr.add_history("Loaded SPICE kernels:")
-        for k in kernels:
-            hdr.add_history(_short(str(k)))
-        hdul.flush()
 
     print(f"Wrote cube: {out_path}  (layers: {', '.join(layers.keys())})")
 

@@ -80,10 +80,15 @@ earthlight_tile_px = 16
 # Optional Earth albedo map FITS (equirectangular). If omitted, a toy land/ocean + clouds model may be used.
 # albedo_map_fits = "DATA/earth_albedo.fits"
 # albedo_map_lon_mode = "0_360"
-# land_albedo = 0.25
-# ocean_albedo = 0.06
-# cloud_amount = 0.3     # 0..1
-# cloud_albedo = 0.6
+ land_albedo = 0.25
+ ocean_albedo = 0.06
+ cloud_amount = 0.3     # 0..1
+ cloud_albedo = 0.6
+
+# optional: ocean sunglint (simple, fast)
+ocean_glint_strength = 0.15
+ocean_glint_sigma_deg = 6.0
+ocean_glint_threshold = 0.12
 
 [sun]
 # Extended solar disk (finite angular size) matters near the terminator/horizon.

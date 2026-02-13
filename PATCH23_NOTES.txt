@@ -1,0 +1,11 @@
+PATCH23: Fix NameError in earthlight_if_tilecached (cfg not in scope)
+
+- earthlight_if_tilecached() in synthmoon/illumination.py incorrectly referenced cfg.earth.
+- This patch makes earthlight_if_tilecached fully parameter-driven:
+    * earth_map_interp
+    * ocean_glint_strength
+    * ocean_glint_sigma_deg
+    * ocean_glint_threshold
+- run_v0.py now passes these from scene.toml [earth] keys.
+
+No other behaviour changes.

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.request import urlretrieve
+import hashlib
 import numpy as np
 import spiceypy as sp
 
@@ -52,6 +54,100 @@ def resolve_moon_frame(requested: str) -> str:
 
     # last resort
     return "IAU_MOON"
+
+
+def _kernel_path(kernels_dir: str | Path, rel: str) -> Path:
+    return Path(kernels_dir) / Path(rel)
+
+
+def load_optional_moon_frame_kernels(
+    kernels_dir: str | Path,
+    auto_download_small_fk: bool = False,
+) -> list[Path]:
+    """Load optional Moon frame/orientation kernels if present.
+
+    This is a convenience layer on top of the meta-kernel. It looks for the
+    standard DE440 Moon frame kernels and binary PCK used to define MOON_ME/
+    MOON_PA aliases and higher-accuracy body orientation.
+
+    If `auto_download_small_fk` is True, missing *small* FK files
+    (moon_assoc_me.tf and moon_assoc_pa.tf) are downloaded from the NAIF
+    generic_kernels repository.
+
+    Returns
+    -------
+    loaded : list[Path]
+        Paths that were successfully loaded.
+    """
+    kd = Path(kernels_dir)
+    loaded: list[Path] = []
+
+    # Optional FK/BPC needed for MOON_ME / MOON_PA aliases (small TF files)
+    assoc_dir = kd / "fk" / "satellites"
+    assoc_dir.mkdir(parents=True, exist_ok=True)
+
+    assoc_me = assoc_dir / "moon_assoc_me.tf"
+    assoc_pa = assoc_dir / "moon_assoc_pa.tf"
+    de440_tf  = assoc_dir / "moon_de440_250416.tf"  # naming can vary; we only try this known one
+    pa_bpc    = kd / "pck" / "moon_pa_de440_200625.bpc"
+
+    if auto_download_small_fk:
+        base = "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/fk/satellites"
+        if not assoc_me.exists():
+            urlretrieve(f"{base}/moon_assoc_me.tf", assoc_me)
+        if not assoc_pa.exists():
+            urlretrieve(f"{base}/moon_assoc_pa.tf", assoc_pa)
+
+    for p in (assoc_me, assoc_pa, de440_tf, pa_bpc):
+        try:
+            if p.exists() and p.stat().st_size > 0:
+                sp.furnsh(str(p))
+                loaded.append(p)
+        except Exception:
+            # keep going; health check will report any remaining issues
+            pass
+
+    return loaded
+
+
+def available_moon_frames() -> list[str]:
+    """Return a short list of Moon-fixed frames that are *currently* recognised."""
+    candidates = [
+        "IAU_MOON",
+        "MOON_ME",
+        "MOON_PA",
+        "MOON_ME_DE440_ME421",
+        "MOON_PA_DE440",
+    ]
+    return [c for c in candidates if _is_known_frame(c)]
+
+
+def require_moon_frame(requested: str, strict: bool = True) -> str:
+    """Resolve a requested Moon frame and (optionally) fail if unavailable."""
+    resolved = resolve_moon_frame(requested)
+    if strict and str(requested).strip() and (resolved == "IAU_MOON") and (str(requested).strip().upper() != "IAU_MOON"):
+        avail = ", ".join(available_moon_frames()) or "(none)"
+        raise RuntimeError(
+            "Requested moon.spice_frame=%r is not available with currently loaded kernels. "
+            "Available Moon frames: %s.\n"
+            "Fix: ensure these files are present and loaded:\n"
+            "  KERNELS/pck/moon_pa_de440_200625.bpc\n"
+            "  KERNELS/fk/satellites/moon_de440_*.tf\n"
+            "  KERNELS/fk/satellites/moon_assoc_me.tf (for MOON_ME alias)\n"
+            "  KERNELS/fk/satellites/moon_assoc_pa.tf (for MOON_PA alias)"
+            % (requested, avail)
+        )
+    return resolved
+
+
+def sha256_prefix(path: str | Path, n_hex: int = 16) -> str:
+    """SHA256 hash prefix for reproducibility manifests (small n_hex)."""
+    p = Path(path)
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()[:n_hex]
 
 @dataclass(frozen=True)
 class SpiceContext:

@@ -47,6 +47,17 @@ class LunarDEM:
     def shape(self) -> tuple[int, int]:
         return self.dem_map.data.shape
 
+    def min_max_radius_km(self) -> tuple[float, float]:
+        """Return (min_radius_km, max_radius_km) from the stored DEM grid."""
+        data = np.asarray(self.dem_map.data)
+        if self.units == "m":
+            mn = float(np.nanmin(data)) / 1000.0
+            mx = float(np.nanmax(data)) / 1000.0
+        else:
+            mn = float(np.nanmin(data))
+            mx = float(np.nanmax(data))
+        return mn, mx
+
     def radius_km(self, lon_deg: np.ndarray, lat_deg: np.ndarray) -> np.ndarray:
         r = self.dem_map.sample_bilinear(lon_deg, lat_deg)
         if self.units == "m":
@@ -71,11 +82,25 @@ class LunarDEM:
         r = self.radius_km(lon_deg, lat_deg) if radius_km is None else np.asarray(radius_km, dtype=np.float64)
         return u * r[:, None]
 
-    def normals_iau(self, lon_deg: np.ndarray, lat_deg: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Return (normals_iau, slope_deg) for given lon/lat arrays.
+    def normals_iau(
+        self,
+        lon_deg: np.ndarray,
+        lat_deg: np.ndarray,
+        method: str = "finite_diff",
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return (normals_iau, slope_deg) for lon/lat arrays.
 
-        Normals are computed via central differences in lon and lat on the DEM surface.
+        Parameters
+        ----------
+        method : str
+            - "finite_diff"  (default): central differences using 5 DEM samples
+            - "sobel":        Sobel-like gradient using a 3x3 neighbourhood
+            - "plane_fit":    fit a plane to a 3x3 neighbourhood (smoother)
+
+        Notes
+        -----
+        "plane_fit" tends to reduce noisy slope estimates at the cost of extra
+        computation. All methods return outward-pointing normals.
         """
         lon = np.asarray(lon_deg, dtype=np.float64)
         lat = np.asarray(lat_deg, dtype=np.float64)
@@ -89,17 +114,64 @@ class LunarDEM:
         lat_p = np.clip(lat + dlat, -90.0, 90.0)
         lat_m = np.clip(lat - dlat, -90.0, 90.0)
 
+        m = str(method).strip().lower()
+
         # Points on DEM surface in IAU frame (km)
         p0 = self.surface_points_iau_km(lon, lat)
-        p_lon_p = self.surface_points_iau_km(lon_p, lat)
-        p_lon_m = self.surface_points_iau_km(lon_m, lat)
-        p_lat_p = self.surface_points_iau_km(lon, lat_p)
-        p_lat_m = self.surface_points_iau_km(lon, lat_m)
 
-        t_lon = p_lon_p - p_lon_m
-        t_lat = p_lat_p - p_lat_m
+        if m in ("finite_diff", "fd"):
+            p_lon_p = self.surface_points_iau_km(lon_p, lat)
+            p_lon_m = self.surface_points_iau_km(lon_m, lat)
+            p_lat_p = self.surface_points_iau_km(lon, lat_p)
+            p_lat_m = self.surface_points_iau_km(lon, lat_m)
 
-        n = np.cross(t_lon, t_lat)
+            t_lon = p_lon_p - p_lon_m
+            t_lat = p_lat_p - p_lat_m
+            n = np.cross(t_lon, t_lat)
+
+        elif m in ("sobel", "sob"):
+            # 3x3 neighbourhood sampling
+            dlon3 = np.array([-dlon, 0.0, dlon], dtype=np.float64)
+            dlat3 = np.array([-dlat, 0.0, dlat], dtype=np.float64)
+            lon_grid = (lon[:, None] + dlon3[None, :])  # (N,3)
+            lat_grid = np.clip(lat[:, None] + dlat3[None, :], -90.0, 90.0)  # (N,3)
+
+            # Build 9 lon/lat samples per point
+            lon9 = np.repeat(lon_grid, 3, axis=1)  # (N,9)
+            lat9 = np.tile(lat_grid, (1, 3))       # (N,9)
+
+            P = self.surface_points_iau_km(lon9.reshape(-1), lat9.reshape(-1)).reshape(-1, 9, 3)
+            # indices in row-major order: lat(-),lat(0),lat(+)
+            # columns: lon(-),lon(0),lon(+)
+            p00, p01, p02 = P[:, 0, :], P[:, 1, :], P[:, 2, :]
+            p10, p11, p12 = P[:, 3, :], P[:, 4, :], P[:, 5, :]
+            p20, p21, p22 = P[:, 6, :], P[:, 7, :], P[:, 8, :]
+
+            # Sobel-like tangent estimates in lon/lat directions
+            t_lon = (p02 + 2.0*p12 + p22) - (p00 + 2.0*p10 + p20)
+            t_lat = (p20 + 2.0*p21 + p22) - (p00 + 2.0*p01 + p02)
+            n = np.cross(t_lon, t_lat)
+
+        elif m in ("plane_fit", "planefit", "pf"):
+            dlon3 = np.array([-dlon, 0.0, dlon], dtype=np.float64)
+            dlat3 = np.array([-dlat, 0.0, dlat], dtype=np.float64)
+            lon_grid = (lon[:, None] + dlon3[None, :])  # (N,3)
+            lat_grid = np.clip(lat[:, None] + dlat3[None, :], -90.0, 90.0)  # (N,3)
+
+            lon9 = np.repeat(lon_grid, 3, axis=1)  # (N,9)
+            lat9 = np.tile(lat_grid, (1, 3))       # (N,9)
+
+            P = self.surface_points_iau_km(lon9.reshape(-1), lat9.reshape(-1)).reshape(-1, 9, 3)
+            mu = P.mean(axis=1, keepdims=True)
+            X = P - mu
+            # covariance per point: (N,3,3)
+            C = (X.transpose(0, 2, 1) @ X) / 9.0
+            # eigenvectors are columns; smallest eigenvalue gives normal
+            w, V = np.linalg.eigh(C)
+            n = V[:, :, 0]
+        else:
+            raise ValueError("dem_normal method must be finite_diff|sobel|plane_fit")
+
         nn = np.linalg.norm(n, axis=1)
         n = n / np.maximum(nn[:, None], 1e-15)
 
@@ -113,7 +185,14 @@ class LunarDEM:
         slope_deg = np.rad2deg(np.arccos(cosang))
         return n, slope_deg
 
-    def normals_j2000(self, et: float, lon_deg: np.ndarray, lat_deg: np.ndarray, moon_frame: str = "IAU_MOON") -> tuple[np.ndarray, np.ndarray]:
+    def normals_j2000(
+        self,
+        et: float,
+        lon_deg: np.ndarray,
+        lat_deg: np.ndarray,
+        moon_frame: str = "IAU_MOON",
+        method: str = "finite_diff",
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Return (normals_j2000, slope_deg) for given lon/lat arrays.
 
@@ -121,7 +200,7 @@ class LunarDEM:
         If you choose MOON_ME/MOON_PA, be sure your DEM and albedo maps are defined
         in the same convention.
         """
-        n_fix, slope_deg = self.normals_iau(lon_deg, lat_deg)
+        n_fix, slope_deg = self.normals_iau(lon_deg, lat_deg, method=method)
         M = sp.pxform(str(moon_frame), "J2000", float(et))
         n_j2k = (M @ n_fix.T).T
         n_j2k = n_j2k / np.maximum(np.linalg.norm(n_j2k, axis=1)[:, None], 1e-15)

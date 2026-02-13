@@ -64,6 +64,26 @@ class EquirectMap:
         out = np.where(np.isfinite(out), out, self.fill)
         return out
 
+    def sample_interp(self, lon_deg: np.ndarray, lat_deg: np.ndarray, interp: str = "nearest") -> np.ndarray:
+        """Sample the map using a selectable interpolation method.
+
+        Parameters
+        ----------
+        interp : str
+            "nearest" (default) or "bilinear".
+
+        Notes
+        -----
+        v0.x used nearest-neighbour everywhere for simplicity; "bilinear" is
+        smoother and helps reduce aliasing/salt-and-pepper artifacts.
+        """
+        m = str(interp).strip().lower()
+        if m in ("nearest", "nn"):
+            return self.sample(lon_deg, lat_deg)
+        if m in ("bilinear", "linear"):
+            return self.sample_bilinear(lon_deg, lat_deg)
+        raise ValueError("interp must be 'nearest' or 'bilinear'")
+
     def sample_bilinear(self, lon_deg: np.ndarray, lat_deg: np.ndarray) -> np.ndarray:
         """
         Bilinear sampling (smoother than nearest-neighbour).
