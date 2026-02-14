@@ -29,37 +29,6 @@ from .albedo_maps import EquirectMap
 from .moon_dem import LunarDEM
 
 
-def _select_only_layer5(cube, layer_names):
-    # Keep only layer 5 (1-based). Returns (cube5, names5).
-    if cube is None:
-        raise ValueError("cube is None")
-    if layer_names is None:
-        layer_names = []
-
-    if getattr(cube, "ndim", None) != 3:
-        raise ValueError(f"Unexpected cube ndim: {getattr(cube, 'ndim', None)} shape={getattr(cube, 'shape', None)}")
-
-    # Support either (ny, nx, nlayers) or (nlayers, ny, nx)
-    if cube.shape[-1] >= 5:
-        axis_last = True
-    elif cube.shape[0] >= 5:
-        axis_last = False
-    else:
-        raise ValueError(f"Requested layer 5, but cube has shape {getattr(cube, 'shape', None)}")
-
-    idx0 = 4  # layer 5 in 0-based indexing
-    if axis_last:
-        cube5 = cube[..., idx0:idx0+1]
-    else:
-        cube5 = cube[idx0:idx0+1, ...]
-
-    if len(layer_names) >= 5:
-        names5 = [layer_names[4]]
-    else:
-        names5 = ["LAYER5"]
-    return cube5, names5
-
-
 def _short(s: str, n: int = 68) -> str:
     if len(s) <= n:
         return s
@@ -135,16 +104,25 @@ def _sun_shadow_mask_dem(
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="synthmoon renderer (v0.x)")
     ap.add_argument("--config", default="scene.toml", help="Path to scene.toml")
-
+    ap.add_argument("--utc", default=None, help="Override time.utc (ISO-8601, e.g. 2026-02-13T03:12:45Z)")
+    ap.add_argument("--out", default=None, help="Override paths.out_fits (output FITS path)")
     ap.add_argument(
-        "--layer5-only",
-        action="store_true",
-        help="Write only layer 5 (1-based) to the FITS cube (default writes all layers).",
+        "--only-layer-index",
+        type=int,
+        default=None,
+        help="If set to N>0, write only the Nth layer (1-based) instead of the full cube. (E.g. 5=RADTOT)",
     )
-
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
+    # --- CLI overrides (convenience for sequences / reproducibility) ---
+    if args.utc:
+        cfg.raw.setdefault("time", {})["utc"] = str(args.utc)
+    if args.out:
+        cfg.raw.setdefault("paths", {})["out_fits"] = str(args.out)
+    if args.only_layer_index is not None:
+        cfg.raw.setdefault("output", {})["only_layer_index"] = int(args.only_layer_index)
+
 
     kernels_dir = str(cfg.paths.get("spice_kernels_dir", "KERNELS"))
     mk = cfg.paths.get("meta_kernel", str(Path(kernels_dir) / "generic.tm"))
@@ -234,6 +212,8 @@ def main(argv: list[str] | None = None) -> None:
     img_alb_moon = np.zeros((ny, nx), dtype=np.float64)
     img_elev_m   = np.zeros((ny, nx), dtype=np.float64)
     img_slope_deg= np.zeros((ny, nx), dtype=np.float64)
+    img_selon_deg = np.full((ny, nx), np.nan, dtype=np.float64)
+    img_selat_deg = np.full((ny, nx), np.nan, dtype=np.float64)
 
     # Optional albedo maps
     moon_map = None
@@ -272,10 +252,8 @@ def main(argv: list[str] | None = None) -> None:
 
         pts = origins_hit + t_hit[:, None] * dirs_hit
 
-        lon = None
-        lat = None
-        if (moon_map is not None) or (moon_dem is not None):
-            lon, lat = _moon_lonlat_deg(et, moon_pos, pts, moon_frame=moon_frame)
+        # Selenographic lon/lat (deg) for each hit-point in the chosen Moon-fixed frame
+        lon, lat = _moon_lonlat_deg(et, moon_pos, pts, moon_frame=moon_frame)
 
         # DEM refinement: iterate per-ray radius based on DEM (treat dem_scale as relief scaler)
         if moon_dem is not None and dem_refine_iter > 0:
@@ -300,9 +278,19 @@ def main(argv: list[str] | None = None) -> None:
 
             img_elev_m[ij_hit[:, 1], ij_hit[:, 0]] = elev_m
             img_slope_deg[ij_hit[:, 1], ij_hit[:, 0]] = slope_deg
+
+            # Store selenographic lon/lat per pixel (degrees); NaN outside the lunar disk
+            # lon is in (-180, 180] by construction; users can wrap to 0..360 if desired.
+            img_selon_deg[ij_hit[:, 1], ij_hit[:, 0]] = lon
+            img_selat_deg[ij_hit[:, 1], ij_hit[:, 0]] = lat
         else:
             normals = pts - moon_pos[None, :]
             normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1e-15)
+
+
+            # Store selenographic lon/lat per pixel (degrees); NaN outside the lunar disk
+            img_selon_deg[ij_hit[:, 1], ij_hit[:, 0]] = lon
+            img_selat_deg[ij_hit[:, 1], ij_hit[:, 0]] = lat
 
         # Moon albedo: constant or map
         A0 = float(cfg.moon.get("albedo", 0.12))
@@ -353,7 +341,7 @@ def main(argv: list[str] | None = None) -> None:
                             sun_pos_j2000=sun_pos,
                             moon_dem=moon_dem,
                             moon_frame=moon_frame,
-                            mean_radius_km=moon_radius,
+                            mean_radius_km=Rm,
                             dem_scale=dem_scale,
                             refine_iter=max(1, int(cfg.moon.get("dem_refine_iter", 3))),
                         )
@@ -483,6 +471,7 @@ def main(argv: list[str] | None = None) -> None:
         "FSUNM": (fsun_moon, "Fsun Moon"),
         "RADFAC": (rad_fac, "Fsun/pi"),
         "MFRAME": (moon_frame, "Moon-fixed frame"),
+        "LLCONV": ("arctan2", "Lon=(-180,180], lat=asin(z/r)"),
         "MKFILE": (Path(mk).name, "MK"),
         "KCOUNT": (len(kernels), "K n"),
     }
@@ -503,17 +492,26 @@ def main(argv: list[str] | None = None) -> None:
         "ALBMOON":  (img_alb_moon, "albedo"),
         "ELEV_M":   (img_elev_m, "elev m (DEM-mean)"),
         "SLOPDEG":  (img_slope_deg, "slope deg"),
+        "SELON":    (img_selon_deg, "deg"),
+        "SELAT":    (img_selat_deg, "deg"),
     }
 
+    # Optional: write only a single layer (1-based index) to keep output small for long sequences.
+    only_i = cfg.output.get("only_layer_index", None)
+    try:
+        only_i = int(only_i) if only_i is not None else None
+    except Exception:
+        only_i = None
+    if (only_i is not None) and (only_i > 0):
+        keys = list(layers.keys())
+        if only_i > len(keys):
+            raise ValueError(f"output.only_layer_index={only_i} but only {len(keys)} layers exist: {keys}")
+        k = keys[only_i - 1]
+        layers = {k: layers[k]}
+        header_cards["ONLYLAY"] = (only_i, "Only Nth layer written (1-based)")
+        header_cards["ONLYNAME"] = (k, "Name of ONLYLAY")
 
-    # If requested, write ONLY layer 5 (1-based) from the ordered 'layers' dict.
-    # In this file's current ordering, layer 5 is whatever the 5th key in layers.keys() is.
-    if args.layer5_only:
-        _keys = list(layers.keys())
-        if len(_keys) < 5:
-            raise ValueError(f"--layer5-only requested, but only {len(_keys)} layer(s) exist.")
-        k5 = _keys[4]
-        layers = {k5: layers[k5]}
+
 
     write_fits_cube(
         out_path=out_path,
@@ -525,7 +523,7 @@ def main(argv: list[str] | None = None) -> None:
         meta_kernel_sha256_prefix=mk_hash,
     )
 
-
+    print(f"Wrote cube: {out_path}  (layers: {', '.join(layers.keys())})")
 
 
 if __name__ == "__main__":

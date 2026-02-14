@@ -1,0 +1,25 @@
+PATCH25: Add selenographic lon/lat layers to FITS cube
+
+What you get
+- Two new layers appended to the cube:
+  * SELON : selenographic longitude (deg), computed in the Moon-fixed frame (see MFRAME)
+  * SELAT : selenographic latitude  (deg)
+- Values are NaN outside the lunar disk.
+
+Layer indexing
+- Existing layer order is unchanged for the first 10 layers.
+- The new layers are appended, so layer indices like 5=RADTOT still mean the same.
+
+Apply + run
+  cd ~/WORKSHOP/SYNTHMOON
+  unzip -o synthmoon_v0_patch25.zip -d .
+  PYTHONPATH=$PWD uv run python -m synthmoon.run_v0 --config scene.toml
+
+Inspect quickly
+  uv run python - <<'PY'
+from astropy.io import fits
+h=fits.getheader("OUTPUT/synth_moon_v0.fits")
+print("NLAYERS",h["NLAYERS"])
+for i in range(1,h["NLAYERS"]+1):
+    print(i, h[f"LAY{i}"], h[f"LU{i}"])
+PY

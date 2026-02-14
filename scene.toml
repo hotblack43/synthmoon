@@ -82,7 +82,7 @@ albedo_map_fits = "DATA/earth_albedo.fits"
 albedo_map_lon_mode = "0_360"
 land_albedo = 0.25
 ocean_albedo = 0.06
-cloud_amount = 0.3     # 0..1
+cloud_amount = 0.0     # 0..1
 cloud_albedo = 0.6 # 0.6
 
 # optional: ocean sunglint (simple, fast)
