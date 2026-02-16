@@ -23,7 +23,14 @@ from .spice_tools import (
 )
 from .camera import camera_basis_from_boresight_and_up, pixel_rays, moon_roi_bbox
 from .intersect import ray_sphere_intersect, ray_sphere_intersect_varradius
-from .illumination import lambert_sun_if, lambert_sun_if_extended_disk, earthlight_if_tilecached
+from .illumination import (
+    lambert_sun_if,
+    lambert_sun_if_extended_disk,
+    hapke_sun_if,
+    hapke_sun_if_extended_disk,
+    earthlight_if_tilecached,
+    HapkeParams,
+)
 from .fits_io import write_fits_cube, scale_to_0_65535_float
 from .albedo_maps import EquirectMap
 from .moon_dem import LunarDEM
@@ -313,39 +320,74 @@ def main(argv: list[str] | None = None) -> None:
             use_ext = bool(sun_cfg.get("extended_disk", False))
             sun_samples = int(sun_cfg.get("disk_samples", 64))
             sun_radius_km = float(sun_cfg.get("radius_km", 695700.0))
+            moon_brdf = str(cfg.moon.get("brdf", "lambert")).strip().lower()
+            hapke_cfg = dict(cfg.moon.get("hapke", {}))
+            hapke = HapkeParams(
+                w=float(hapke_cfg.get("single_scattering_albedo", hapke_cfg.get("w", 0.55))),
+                b=float(hapke_cfg.get("phase_b", hapke_cfg.get("b", 0.30))),
+                c=float(hapke_cfg.get("phase_c", hapke_cfg.get("c", 0.40))),
+                b0=float(hapke_cfg.get("opposition_b0", hapke_cfg.get("b0", 1.00))),
+                h=float(hapke_cfg.get("opposition_h", hapke_cfg.get("h", 0.06))),
+                theta_deg=float(hapke_cfg.get("roughness_deg", hapke_cfg.get("theta_deg", 20.0))),
+            )
 
-            if use_ext:
-                sun_if = lambert_sun_if_extended_disk(
-                    hit_points=pts,
-                    normals=normals,
-                    moon_center=moon_pos,
-                    sun_pos=sun_pos,
-                    moon_albedo=A_m,
-                    n_samples=sun_samples,
-                    sun_radius_km=sun_radius_km,
-                ).astype(np.float64)
+            if moon_brdf == "hapke":
+                # Keep map/constant albedo as a local multiplicative scale relative to A0.
+                alb_scale = A_m / max(A0, 1e-12)
+                if use_ext:
+                    sun_if = hapke_sun_if_extended_disk(
+                        hit_points=pts,
+                        normals=normals,
+                        moon_center=moon_pos,
+                        sun_pos=sun_pos,
+                        obs_pos=obs_pos,
+                        hapke=hapke,
+                        moon_albedo_scale=alb_scale,
+                        n_samples=sun_samples,
+                        sun_radius_km=sun_radius_km,
+                    ).astype(np.float64)
+                else:
+                    sun_if = hapke_sun_if(
+                        hit_points=pts,
+                        normals=normals,
+                        sun_pos=sun_pos,
+                        obs_pos=obs_pos,
+                        hapke=hapke,
+                        moon_albedo_scale=alb_scale,
+                    ).astype(np.float64)
             else:
-                sun_if = lambert_sun_if(pts, normals, sun_pos, A_m).astype(np.float64)
+                if use_ext:
+                    sun_if = lambert_sun_if_extended_disk(
+                        hit_points=pts,
+                        normals=normals,
+                        moon_center=moon_pos,
+                        sun_pos=sun_pos,
+                        moon_albedo=A_m,
+                        n_samples=sun_samples,
+                        sun_radius_km=sun_radius_km,
+                    ).astype(np.float64)
+                else:
+                    sun_if = lambert_sun_if(pts, normals, sun_pos, A_m).astype(np.float64)
 
-                # Optional hard terrain shadows (DEM) for point-source Sun.
-                shadow_sun = str(cfg.shadows.get("sun", cfg.shadows.get("mode", "simple"))).lower()
-                if shadow_sun in ("dem", "terrain"):
-                    if moon_dem is None:
-                        print("NOTE: shadows.sun='dem' requested but moon.dem_fits is not set; ignoring.")
-                    else:
-                        mask = _sun_shadow_mask_dem(
-                            et=et,
-                            moon_pos_j2000=moon_pos,
-                            pts_j2000=pts,
-                            normals_j2000=normals,
-                            sun_pos_j2000=sun_pos,
-                            moon_dem=moon_dem,
-                            moon_frame=moon_frame,
-                            mean_radius_km=Rm,
-                            dem_scale=dem_scale,
-                            refine_iter=max(1, int(cfg.moon.get("dem_refine_iter", 3))),
-                        )
-                        sun_if[mask] = 0.0
+            # Optional hard terrain shadows (DEM) for point-source Sun.
+            shadow_sun = str(cfg.shadows.get("sun", cfg.shadows.get("mode", "simple"))).lower()
+            if (not use_ext) and (shadow_sun in ("dem", "terrain")):
+                if moon_dem is None:
+                    print("NOTE: shadows.sun='dem' requested but moon.dem_fits is not set; ignoring.")
+                else:
+                    mask = _sun_shadow_mask_dem(
+                        et=et,
+                        moon_pos_j2000=moon_pos,
+                        pts_j2000=pts,
+                        normals_j2000=normals,
+                        sun_pos_j2000=sun_pos,
+                        moon_dem=moon_dem,
+                        moon_frame=moon_frame,
+                        mean_radius_km=Rm,
+                        dem_scale=dem_scale,
+                        refine_iter=max(1, int(cfg.moon.get("dem_refine_iter", 3))),
+                    )
+                    sun_if[mask] = 0.0
 
             # Note: extended-Sun penumbra currently uses a mean-sphere horizon;
             # terrain shadowing + finite Sun disk is planned.
