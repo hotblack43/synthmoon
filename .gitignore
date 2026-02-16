@@ -11,6 +11,7 @@ OLD/
 .venv/
 __pycache__/
 *.pyc
+*.egg-info/
 
 # DEM / big data
 DATA/LOLA_GDR/
@@ -19,5 +20,3 @@ DATA/moon_dem_*.fits
 # local outputs / artefacts
 *.fits
 synthmoon.egg-info/
-.venv/
-__pycache__/

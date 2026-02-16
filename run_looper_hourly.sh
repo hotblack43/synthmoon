@@ -3,7 +3,7 @@ set -euo pipefail
 
 CONFIG="scene.toml"
 OUTDIR="OUTPUT/hourly_layer5"
-N_STEPS=48
+N_STEPS=1
 STEP_HOURS=1
 START_UTC="2026-01-24T00:00:00Z"   # change this
 
