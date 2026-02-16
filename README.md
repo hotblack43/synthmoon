@@ -53,6 +53,31 @@ python -m synthmoon.run_v0 --config scene.toml
 
 Output FITS is written to `OUTPUT/` by default.
 
+Regression check for earthlight layers (IF_EARTH/RAD_EAR non-zero at a known UTC):
+```bash
+./tools/regression_check_earthlight_nonzero.sh
+```
+
+Moon BRDF switch:
+```toml
+[moon]
+brdf = "lambert"   # or "hapke"
+
+[moon.hapke]
+single_scattering_albedo = 0.55
+phase_b = 0.30
+phase_c = 0.40
+opposition_b0 = 1.00
+opposition_h = 0.06
+roughness_deg = 20.0
+```
+`hapke` modifies direct-sun lunar reflectance (I/F) while keeping output layer layout unchanged.
+
+Lambert vs Hapke regression check:
+```bash
+./tools/regression_compare_lambert_hapke.sh
+```
+
 ## Notes
 
 - Geometry is computed using SPICE via SpiceyPy. Best practice is to load kernels via a meta-kernel (FURNSH).  

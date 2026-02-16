@@ -58,6 +58,130 @@ def lambert_sun_if(hit_points: np.ndarray, normals: np.ndarray, sun_pos: np.ndar
     A = moon_albedo if np.isscalar(moon_albedo) else np.asarray(moon_albedo, dtype=float)
     return A * mu0
 
+
+@dataclass(frozen=True)
+class HapkeParams:
+    w: float = 0.55
+    b: float = 0.30
+    c: float = 0.40
+    b0: float = 1.00
+    h: float = 0.06
+    theta_deg: float = 20.0
+
+
+def _hapke_h(mu: np.ndarray, w: float) -> np.ndarray:
+    g = np.sqrt(np.clip(1.0 - w, 1e-9, 1.0))
+    return (1.0 + 2.0 * mu) / np.maximum(1.0 + 2.0 * mu * g, 1e-12)
+
+
+def _hapke_p_hg2(cosg: np.ndarray, b: float, c: float) -> np.ndarray:
+    b = float(np.clip(b, 0.0, 0.99))
+    c = float(np.clip(c, 0.0, 1.0))
+    p_f = (1.0 - b * b) / np.maximum((1.0 + 2.0 * b * cosg + b * b) ** 1.5, 1e-12)
+    p_b = (1.0 - b * b) / np.maximum((1.0 - 2.0 * b * cosg + b * b) ** 1.5, 1e-12)
+    return (1.0 - c) * p_f + c * p_b
+
+
+def hapke_if(
+    mu0: np.ndarray,
+    mu: np.ndarray,
+    phase_rad: np.ndarray,
+    p: HapkeParams,
+) -> np.ndarray:
+    mu0 = np.clip(np.asarray(mu0, dtype=float), 0.0, 1.0)
+    mu = np.clip(np.asarray(mu, dtype=float), 0.0, 1.0)
+    g = np.clip(np.asarray(phase_rad, dtype=float), 0.0, np.pi)
+
+    w = float(np.clip(p.w, 1e-6, 0.999999))
+    h = float(max(p.h, 1e-6))
+    b0 = float(max(p.b0, 0.0))
+
+    cosg = np.cos(g)
+    P = _hapke_p_hg2(cosg, p.b, p.c)
+    B = b0 / (1.0 + np.tan(0.5 * g) / h)
+    H0 = _hapke_h(mu0, w)
+    H = _hapke_h(mu, w)
+
+    # Lightweight macroscopic roughness attenuation.
+    th = np.deg2rad(max(float(p.theta_deg), 0.0))
+    rough = np.exp(-np.tan(th) ** 2 * (1.0 - mu0) * (1.0 - mu))
+
+    iof = (w / 4.0) * (mu0 / np.maximum(mu0 + mu, 1e-12)) * (((1.0 + B) * P) + (H0 * H - 1.0)) * rough
+    iof = np.where((mu0 > 0.0) & (mu > 0.0), iof, 0.0)
+    return np.clip(iof, 0.0, None)
+
+
+def hapke_sun_if(
+    hit_points: np.ndarray,
+    normals: np.ndarray,
+    sun_pos: np.ndarray,
+    obs_pos: np.ndarray,
+    hapke: HapkeParams,
+    moon_albedo_scale: np.ndarray | float = 1.0,
+) -> np.ndarray:
+    s_dir = _normalize(sun_pos[None, :] - hit_points)
+    v_dir = _normalize(obs_pos[None, :] - hit_points)
+    mu0 = np.maximum(0.0, np.sum(normals * s_dir, axis=1))
+    mu = np.maximum(0.0, np.sum(normals * v_dir, axis=1))
+    phase = np.arccos(np.clip(np.sum(s_dir * v_dir, axis=1), -1.0, 1.0))
+    out = hapke_if(mu0, mu, phase, hapke)
+    A = moon_albedo_scale if np.isscalar(moon_albedo_scale) else np.asarray(moon_albedo_scale, dtype=float)
+    return out * A
+
+
+def hapke_sun_if_extended_disk(
+    hit_points: np.ndarray,
+    normals: np.ndarray,
+    moon_center: np.ndarray,
+    sun_pos: np.ndarray,
+    obs_pos: np.ndarray,
+    hapke: HapkeParams,
+    moon_albedo_scale: np.ndarray | float = 1.0,
+    n_samples: int = 64,
+    sun_radius_km: float = 695700.0,
+) -> np.ndarray:
+    N = hit_points.shape[0]
+    out = np.zeros(N, dtype=np.float64)
+    A = moon_albedo_scale if np.isscalar(moon_albedo_scale) else np.asarray(moon_albedo_scale, dtype=float)
+
+    v = sun_pos[None, :] - hit_points
+    d = np.linalg.norm(v, axis=1)
+    s_dir = v / np.maximum(d[:, None], 1e-15)
+    alpha = np.arcsin(np.clip(float(sun_radius_km) / np.maximum(d, 1e-9), 0.0, 1.0))
+    sin_alpha = np.sin(alpha)
+
+    radial = _normalize(hit_points - moon_center[None, :])
+    v_dir = _normalize(obs_pos[None, :] - hit_points)
+    mu = np.maximum(0.0, np.einsum("ij,ij->i", normals, v_dir))
+    dotc = np.einsum("ij,ij->i", radial, s_dir)
+
+    full = dotc >= sin_alpha
+    none = dotc <= -sin_alpha
+    partial = ~(full | none)
+
+    if np.any(full):
+        mu0 = np.maximum(0.0, np.einsum("ij,ij->i", normals[full], s_dir[full]))
+        phase = np.arccos(np.clip(np.einsum("ij,ij->i", s_dir[full], v_dir[full]), -1.0, 1.0))
+        out[full] = hapke_if(mu0, mu[full], phase, hapke) * (float(A) if np.isscalar(A) else A[full])
+
+    if np.any(partial):
+        sampler = EarthDiskSampler.create(int(n_samples))
+        idxs = np.where(partial)[0]
+        for k in idxs:
+            omega, _w = sampler.directions(s_dir[k], float(alpha[k]))
+            vis = (omega @ radial[k]) > 0.0
+            if not np.any(vis):
+                continue
+            om = omega[vis]
+            mu0k = np.maximum(0.0, om @ normals[k])
+            muk = np.full(mu0k.shape, mu[k], dtype=float)
+            phasek = np.arccos(np.clip(om @ v_dir[k], -1.0, 1.0))
+            ifk = hapke_if(mu0k, muk, phasek, hapke)
+            mean_if = float(np.mean(ifk))
+            out[k] = mean_if * (float(A) if np.isscalar(A) else float(A[k]))
+
+    return out
+
 def lambert_sun_if_extended_disk(
     hit_points: np.ndarray,
     normals: np.ndarray,
