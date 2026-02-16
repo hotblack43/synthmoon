@@ -64,6 +64,16 @@ albedo = 0.12
 # dem_scale = 1.0          # set >1 temporarily to exaggerate relief for debugging
 # dem_refine_iter = 3      # 2–4 reasonable
 
+[moon.hapke]
+# Used only when moon.brdf = "hapke".
+# Hapke-like parameters (dimensionless unless noted):
+single_scattering_albedo = 0.55
+phase_b = 0.30
+phase_c = 0.40
+opposition_b0 = 1.00
+opposition_h = 0.06
+roughness_deg = 20.0
+
 [earth]
 radius_km = 6378.1366
 brdf = "lambert"
