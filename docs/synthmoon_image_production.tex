@@ -1,0 +1,198 @@
+\documentclass[12pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{datetime}
+\renewcommand{\dateseparator}{-}
+\settimeformat{hhmmsstime}
+
+\setlist{nosep}
+
+\title{synthmoon: How Images Are Produced\\(Legacy and DEM-Advanced Modes)}
+\author{Peter Thejll}
+\date{\today\ \currenttime}
+
+\begin{document}
+\maketitle
+
+\section{Purpose}
+This note documents the current image-generation pipeline in \texttt{synthmoon}, with emphasis on:
+\begin{itemize}
+  \item the legacy simple setup (point Sun + point Earth),
+  \item the advanced setup (extended-source illumination + DEM-aware geometry/shadowing),
+  \item the movie-generation scripts.
+\end{itemize}
+
+\section{Top-Level Pipeline}
+The main renderer is \texttt{synthmoon/run\_v0.py}. For one UTC timestamp, it does:
+\begin{enumerate}
+  \item Load SPICE kernels and resolve the Moon-fixed frame (e.g.\ \texttt{MOON\_ME}).
+  \item Compute Sun/Earth/Moon/observer geometry in J2000.
+  \item Build camera rays and intersect with a lunar sphere.
+  \item Optionally refine intersections using a lunar DEM (\texttt{dem\_refine\_iter}).
+  \item Compute local normal, slope, elevation, and lunar albedo.
+  \item Compute solar I/F (\texttt{lambert} or \texttt{hapke}; point or extended Sun).
+  \item Compute Earthshine I/F (point-Earth legacy or extended-disk Earth quadrature).
+  \item Sum contributions:
+  \[
+    I/F_{\text{total}} = I/F_{\odot} + I/F_{\oplus}.
+  \]
+  \item Convert to radiance using:
+  \[
+    L = (I/F)\,\frac{F_{\odot,\text{Moon}}}{\pi}.
+  \]
+  \item Optionally downsample from high render resolution (e.g.\ 2048) to output (e.g.\ 512) by NaN-aware block mean.
+  \item Write FITS layers and metadata.
+\end{enumerate}
+
+\section{CLI Arguments (Complete)}
+\subsection{Main renderer: \texttt{uv run -m synthmoon.run\_v0}}
+\begin{itemize}
+  \item \texttt{--config PATH}: path to config file (default: \texttt{scene.toml}).
+  \item \texttt{--utc ISO8601}: override \texttt{time.utc} from config.
+  \item \texttt{--out PATH}: override \texttt{paths.out\_fits} from config.
+  \item \texttt{--only-layer-index N}: write only layer \texttt{N} (1-based).
+  \item \texttt{--comparison-child}: internal flag for spawned comparison renders.
+  \item \texttt{--legacy-parallel}: internal legacy mode (point Sun + point Earth).
+\end{itemize}
+
+\subsection{Video builder: \texttt{uv run python tools/build\_movie\_video\_hourly.py}}
+\begin{itemize}
+  \item \texttt{--config PATH} (default: \texttt{scene.toml})
+  \item \texttt{--start-utc ISO8601} (required)
+  \item \texttt{--hours N} (default: \texttt{672})
+  \item \texttt{--step-hours N} (default: \texttt{1})
+  \item \texttt{--fps N} (default: \texttt{24})
+  \item \texttt{--out-mp4 PATH} (default: \texttt{OUTPUT/movie\_28d\_hourly\_iftotal.mp4})
+  \item \texttt{--out-mov PATH} (default: \texttt{OUTPUT/movie\_28d\_hourly\_iftotal.mov})
+  \item \texttt{--workdir PATH} (default: \texttt{/tmp/synthmoon\_movie\_frames})
+  \item \texttt{--tmp-fits PATH} (default: \texttt{/tmp/synthmoon\_movie\_frame.fits})
+  \item \texttt{--vmin FLOAT} (default: \texttt{0.0})
+  \item \texttt{--vmax FLOAT} (default: auto from first frame p99.9)
+  \item \texttt{--crf N} (default: \texttt{18})
+\end{itemize}
+
+\subsection{Movie-cube builder: \texttt{uv run python tools/build\_movie\_cube\_hourly.py}}
+\begin{itemize}
+  \item \texttt{--config PATH} (default: \texttt{/tmp/scene\_movie.toml})
+  \item \texttt{--start-utc ISO8601} (required)
+  \item \texttt{--hours N} (default: \texttt{672})
+  \item \texttt{--step-hours N} (default: \texttt{1})
+  \item \texttt{--out PATH} (default: \texttt{OUTPUT/movie\_28d\_hourly\_iftotal.fits})
+  \item \texttt{--tmp-frame PATH} (default: \texttt{/tmp/synthmoon\_movie\_frame.fits})
+  \item \texttt{--dtype \{float32,float64\}} (default: \texttt{float32})
+\end{itemize}
+
+\section{Legacy Simple Setup}
+Legacy mode is activated internally by the comparison workflow (\texttt{--legacy-parallel}) and is defined as:
+\begin{itemize}
+  \item \textbf{Sun}: point source (\texttt{sun.extended\_disk = false})
+  \item \textbf{Earthshine}: point source (\texttt{earth.point\_source = true})
+  \item \textbf{Earthshine enabled}: \texttt{illumination.include\_earthlight = true}
+\end{itemize}
+
+So this is not ``no Earthshine''; it is a physically simpler Earthshine approximation.
+
+\subsection{Legacy point-Earth model}
+In \texttt{illumination.py}, \texttt{earthlight\_if\_point\_source(...)} uses one arrival direction (Earth center) and a Lambert-sphere phase factor:
+\[
+\Phi(g)=\frac{\sin g + (\pi-g)\cos g}{\pi}.
+\]
+The irradiance on a Moon facet scales as
+\[
+E_{\oplus} \propto \frac{2}{3} A_{\oplus}\,F_{\odot,\oplus}\,\Phi(g)\left(\frac{R_{\oplus}}{d_{\oplus m}}\right)^2 \mu_m,
+\]
+and then converts to lunar I/F with local lunar albedo and solar-normalization factor.
+
+\section{Advanced Setup With DEM}
+The advanced mode in \texttt{scene.toml} typically uses:
+\begin{itemize}
+  \item \textbf{Extended Sun}: \texttt{sun.extended\_disk = true}
+  \item \textbf{Extended Earth}: \texttt{earth.point\_source = false}, disk quadrature enabled
+  \item \textbf{DEM}: \texttt{moon.dem\_fits} set, with \texttt{dem\_refine\_iter > 0}
+  \item \textbf{DEM Sun shadowing}: \texttt{shadows.sun = "dem"}
+\end{itemize}
+
+\subsection{DEM geometry refinement}
+Ray--Moon intersections start from a sphere, then iterate with per-hit DEM radius
+\[
+R(\lambda,\phi)=R_0+\texttt{dem\_scale}\left(R_{\text{DEM}}(\lambda,\phi)-R_0\right),
+\]
+which improves hit points and local topographic normals.
+
+\subsection{Extended Sun + DEM occlusion}
+For extended Sun, \texttt{run\_v0.py} estimates visible solar-disk fraction per pixel:
+\[
+f_{\text{vis},\odot}\in[0,1].
+\]
+It samples directions over the Sun disk and ray-tests occlusion against DEM topography. The direct-sun term is scaled by
+\[
+I/F_{\odot,\text{final}} = f_{\text{vis},\odot}\,I/F_{\odot,\text{extended}}.
+\]
+Diagnostic output layers \texttt{SUNVIS} and \texttt{SUNBLK} store visible and blocked fractions.
+
+\subsection{Extended Earthshine (advanced Earth model)}
+\texttt{earthlight\_if\_tilecached(...)} performs disk quadrature over Earth, including:
+\begin{itemize}
+  \item Earth phase and Sun illumination of Earth patches,
+  \item visibility of Earth patches toward Moon,
+  \item optional Earth albedo map (\texttt{DATA/earth\_albedo.fits}),
+  \item optional simple cloud and ocean-glint terms,
+  \item tile caching (\texttt{earthlight\_tile\_px}) for speed.
+\end{itemize}
+
+\section{Output Layers and Products}
+When writing full cubes, the renderer writes layers including:
+\texttt{IFTOTAL}, \texttt{IF\_SUN}, \texttt{IF\_EARTH}, \texttt{RADTOT}, \texttt{RAD\_SUN}, \texttt{RAD\_EAR},
+\texttt{ALBMOON}, \texttt{ELEV\_M}, \texttt{SLOPDEG}, \texttt{SUNVIS}, \texttt{SUNBLK}, \texttt{SELON}, \texttt{SELAT}.
+
+For long runs, a single 2D layer can be written (\texttt{write\_cube=false} + \texttt{only\_layer\_index}).
+Current operational setup writes only \texttt{IFTOTAL} as a 2D floating-point FITS.
+
+\section{Comparison Mode (Advanced vs Legacy)}
+With \texttt{[comparison] enabled=true}, one command produces:
+\begin{itemize}
+  \item \texttt{\_advanced.fits}
+  \item \texttt{\_legacy\_parallel.fits}
+  \item \texttt{\_diff\_if.fits} (if \texttt{write\_diff=true})
+\end{itemize}
+Diff layers include absolute and relative metrics (\texttt{DIFF\_IF}, \texttt{PCTDIFF}, \texttt{PCTROB}, etc.), plus explicit source layers \texttt{ADV\_IF} and \texttt{LEG\_IF}.
+
+\section{Movie Maker Scripts}
+Two scripts are relevant:
+\begin{itemize}
+  \item \texttt{tools/build\_movie\_video\_hourly.py}: renders frames by repeatedly calling \texttt{run\_v0}, converts each frame to 16-bit PNG, and encodes MP4/MOV with \texttt{ffmpeg}. This avoids huge FITS cubes.
+  \item \texttt{tools/build\_movie\_cube\_hourly.py}: builds a FITS time cube (\texttt{NFRAMES} $\times$ ny $\times$ nx).
+\end{itemize}
+
+\subsection{Typical video command}
+\begin{verbatim}
+uv run python tools/build_movie_video_hourly.py \
+  --config /tmp/scene_movie_hires.toml \
+  --start-utc 2006-02-13T06:18:45Z \
+  --hours 240 --step-hours 6 --fps 24 \
+  --out-mp4 OUTPUT/movie_60d_6h_iftotal.mp4 \
+  --out-mov OUTPUT/movie_60d_6h_iftotal.mov
+\end{verbatim}
+
+\section{Practical Notes}
+\begin{itemize}
+  \item High-quality 512x512 output is produced by render-then-downsample (e.g.\ 2048 $\rightarrow$ 512), not direct low-res rendering.
+  \item FITS headers store run provenance (\texttt{RUNMODE}, \texttt{SUNEXT}, \texttt{EARTHPT}, \texttt{SHSUN}, DEM metadata, observer location, etc.).
+  \item The project has moved from the baseline (\texttt{0.2.0}) to comparison support (\texttt{0.3.0}) and DEM-aware extended-Sun shadow correction (\texttt{0.3.1}).
+\end{itemize}
+
+\begin{figure}
+  \centering
+  \includegraphics[width=0.99\linewidth]{fig/compare_dots_vs_dem_20060217T061845Z_side_by_side.png}
+  \caption{Synthetic lunar I/F images at the same UTC (2006-02-17T06:18:45Z), observer geometry, and output scale. Left: advanced model with LOLA DEM topography, DEM-aware solar shadowing, and extended-source Sun and Earthshine. Right: legacy dot-source model with Sun and Earth treated as point sources and no DEM terrain model. Both panels are rendered at high resolution and downsampled to $512\times512$.}
+  \label{fig:sidebyside}
+\end{figure}
+
+\end{document}
