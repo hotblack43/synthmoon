@@ -33,6 +33,7 @@ from .illumination import (
     hapke_sun_if_extended_disk,
     earthlight_if_tilecached,
     earthlight_if_point_source,
+    EarthDiskSampler,
     HapkeParams,
 )
 from .fits_io import write_fits_cube, scale_to_0_65535_float
@@ -44,6 +45,12 @@ def _short(s: str, n: int = 68) -> str:
     if len(s) <= n:
         return s
     return "…" + s[-(n - 1):]
+
+
+def _normalize(v: np.ndarray, eps: float = 1e-15) -> np.ndarray:
+    n = np.linalg.norm(v, axis=-1, keepdims=True)
+    n = np.maximum(n, eps)
+    return v / n
 
 
 def _moon_lonlat_deg(et: float, moon_center_j2000: np.ndarray, pts_j2000: np.ndarray, moon_frame: str = "IAU_MOON") -> tuple[np.ndarray, np.ndarray]:
@@ -83,7 +90,7 @@ def _sun_shadow_mask_dem(
     # Move the ray origin a small distance above the surface to avoid self-intersection.
     eps_km = 1e-3  # 1 m
     origins = pts_j2000 + eps_km * normals_j2000
-    dirs = normalize(sun_pos_j2000 - pts_j2000)
+    dirs = _normalize(sun_pos_j2000 - pts_j2000)
 
     # Conservative outer envelope: mean radius scaled up to the max DEM radius.
     rmin_km, rmax_km = moon_dem.min_max_radius_km()
@@ -110,6 +117,118 @@ def _sun_shadow_mask_dem(
         t[idx] = t_new
 
     return hit
+
+
+def _sun_shadow_mask_dem_dirs(
+    et: float,
+    moon_pos_j2000: np.ndarray,
+    pts_j2000: np.ndarray,
+    normals_j2000: np.ndarray,
+    dirs_j2000: np.ndarray,
+    moon_dem: "LunarDEM",
+    moon_frame: str,
+    mean_radius_km: float,
+    dem_scale: float,
+    refine_iter: int = 3,
+) -> np.ndarray:
+    """Return shadow mask for arbitrary solar ray directions (one direction per point)."""
+    if pts_j2000.size == 0:
+        return np.zeros((0,), dtype=bool)
+
+    eps_km = 1e-3
+    origins = pts_j2000 + eps_km * normals_j2000
+    dirs = _normalize(dirs_j2000)
+
+    _rmin_km, rmax_km = moon_dem.min_max_radius_km()
+    r_env_km = mean_radius_km + max(0.0, (rmax_km - mean_radius_km) * dem_scale)
+
+    hit_env, t_env = ray_sphere_intersect(origins, dirs, moon_pos_j2000, r_env_km)
+    if not np.any(hit_env):
+        return hit_env
+
+    hit = hit_env.copy()
+    t = t_env.copy()
+    for _ in range(int(max(1, refine_iter))):
+        idx = np.where(hit)[0]
+        if idx.size == 0:
+            break
+        pts_hit = origins[idx] + t[idx, None] * dirs[idx]
+        lon, lat = _moon_lonlat_deg(et, moon_pos_j2000, pts_hit, moon_frame=moon_frame)
+        r_dem = moon_dem.radius_km(lon, lat)
+        r_km = mean_radius_km + (r_dem - mean_radius_km) * dem_scale
+        hit_new, t_new = ray_sphere_intersect_varradius(origins[idx], dirs[idx], moon_pos_j2000, r_km)
+        hit[idx] = hit_new
+        t[idx] = t_new
+
+    return hit
+
+
+def _sun_visibility_fraction_dem_extended(
+    *,
+    et: float,
+    moon_pos_j2000: np.ndarray,
+    pts_j2000: np.ndarray,
+    normals_j2000: np.ndarray,
+    sun_pos_j2000: np.ndarray,
+    moon_dem: "LunarDEM",
+    moon_frame: str,
+    mean_radius_km: float,
+    dem_scale: float,
+    n_samples: int,
+    sun_radius_km: float,
+    refine_iter: int = 3,
+) -> np.ndarray:
+    """Estimate per-point visible fraction of the extended Sun disk using DEM occlusion."""
+    n = pts_j2000.shape[0]
+    if n == 0:
+        return np.zeros((0,), dtype=np.float64)
+
+    v = sun_pos_j2000[None, :] - pts_j2000
+    d = np.linalg.norm(v, axis=1)
+    s_dir = _normalize(v)
+    alpha = np.arcsin(np.clip(float(sun_radius_km) / np.maximum(d, 1e-9), 0.0, 1.0))
+
+    # Only points near geometric horizon can have partial visibility.
+    radial = _normalize(pts_j2000 - moon_pos_j2000[None, :])
+    dotc = np.einsum("ij,ij->i", radial, s_dir)
+    sin_alpha = np.sin(alpha)
+    full = dotc >= sin_alpha
+    none = dotc <= -sin_alpha
+    partial = ~(full | none)
+
+    vis = np.zeros(n, dtype=np.float64)
+    vis[full] = 1.0
+    vis[none] = 0.0
+    idx_part = np.where(partial)[0]
+    if idx_part.size == 0:
+        return vis
+
+    sampler = EarthDiskSampler.create(max(1, int(n_samples)))
+    s = sampler.n_samples
+
+    pts_rep = np.repeat(pts_j2000[idx_part], s, axis=0)
+    nor_rep = np.repeat(normals_j2000[idx_part], s, axis=0)
+    dirs_all = np.zeros((idx_part.size * s, 3), dtype=np.float64)
+
+    for i, k in enumerate(idx_part):
+        omega, _w = sampler.directions(s_dir[k], float(alpha[k]))
+        dirs_all[i * s : (i + 1) * s] = omega
+
+    blocked = _sun_shadow_mask_dem_dirs(
+        et=et,
+        moon_pos_j2000=moon_pos_j2000,
+        pts_j2000=pts_rep,
+        normals_j2000=nor_rep,
+        dirs_j2000=dirs_all,
+        moon_dem=moon_dem,
+        moon_frame=moon_frame,
+        mean_radius_km=mean_radius_km,
+        dem_scale=dem_scale,
+        refine_iter=refine_iter,
+    ).reshape(idx_part.size, s)
+
+    vis[idx_part] = 1.0 - blocked.mean(axis=1)
+    return np.clip(vis, 0.0, 1.0)
 
 
 def _derive_variant_path(base_out: str | Path, suffix: str) -> Path:
@@ -541,12 +660,14 @@ def main(argv: list[str] | None = None) -> None:
                 else:
                     sun_if = lambert_sun_if(pts, normals, sun_pos, A_m).astype(np.float64)
 
-            # Optional hard terrain shadows (DEM) for point-source Sun.
+            # Optional terrain shadows:
+            # - point-source Sun: hard shadow mask
+            # - extended Sun: DEM-based visible-fraction correction (penumbra approximation)
             shadow_sun = str(cfg.shadows.get("sun", cfg.shadows.get("mode", "simple"))).lower()
-            if (not use_ext) and (shadow_sun in ("dem", "terrain")):
+            if shadow_sun in ("dem", "terrain"):
                 if moon_dem is None:
                     print("NOTE: shadows.sun='dem' requested but moon.dem_fits is not set; ignoring.")
-                else:
+                elif not use_ext:
                     mask = _sun_shadow_mask_dem(
                         et=et,
                         moon_pos_j2000=moon_pos,
@@ -560,9 +681,23 @@ def main(argv: list[str] | None = None) -> None:
                         refine_iter=max(1, int(cfg.moon.get("dem_refine_iter", 3))),
                     )
                     sun_if[mask] = 0.0
-
-            # Note: extended-Sun penumbra currently uses a mean-sphere horizon;
-            # terrain shadowing + finite Sun disk is planned.
+                else:
+                    ext_shadow_samples = int(sun_cfg.get("shadow_disk_samples", max(8, sun_samples // 2)))
+                    vis_frac = _sun_visibility_fraction_dem_extended(
+                        et=et,
+                        moon_pos_j2000=moon_pos,
+                        pts_j2000=pts,
+                        normals_j2000=normals,
+                        sun_pos_j2000=sun_pos,
+                        moon_dem=moon_dem,
+                        moon_frame=moon_frame,
+                        mean_radius_km=Rm,
+                        dem_scale=dem_scale,
+                        n_samples=ext_shadow_samples,
+                        sun_radius_km=sun_radius_km,
+                        refine_iter=max(1, int(cfg.moon.get("dem_refine_iter", 3))),
+                    )
+                    sun_if *= vis_frac
 
         if bool(cfg.illumination.get("include_earthlight", True)):
             earth_albedo_scale = float(cfg.earth.get("albedo", 1.0))  # acts as scale

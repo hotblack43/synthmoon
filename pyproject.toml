@@ -1,6 +1,6 @@
 [project]
 name = "synthmoon"
-version = "0.3.0"
+version = "0.3.1"
 description = "Synthetic lunar images with sunlight/earthlight and advanced-vs-legacy comparison outputs."
 requires-python = ">=3.10"
 dependencies = [
