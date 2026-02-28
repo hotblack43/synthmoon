@@ -6,9 +6,9 @@ utc = "2006-02-13T06:18:45Z"
 # "earth_site" uses lon/lat/height on Earth (IAU_EARTH).
 # "spacecraft_state" uses an inertial state vector you supply.
 mode = "earth_site"  # "earth_site" | "spacecraft_state"
-lon_deg = 12.5683
-lat_deg = 55.6761
-height_m = 20.0
+lon_deg = -155.5763   # Mauna Loa Observatory
+lat_deg = 19.5362
+height_m = 3397.0
 
 # If spacecraft_state:
 # frame = "J2000"
@@ -20,8 +20,8 @@ height_m = 20.0
 # vz_km_s = 0.0
 
 [camera]
-nx = 512
-ny = 512
+nx = 2048
+ny = 2048
 fov_deg = 1.0
 roll_deg = 0.0
 pointing = "moon_center"  # currently supported: "moon_center"
@@ -29,7 +29,7 @@ pointing = "moon_center"  # currently supported: "moon_center"
 [paths]
 spice_kernels_dir = "KERNELS"
 meta_kernel = "KERNELS/generic.tm"
-out_fits = "OUTPUT/synth_moon_v0.fits"
+out_fits = "OUTPUT/synth_moon_advanced_dem_maunaloa.fits"
 
 [moon]
 radius_km = 1737.4
@@ -111,16 +111,21 @@ include_sun = true
 include_earthlight = true
 
 [shadows]
-# v0.1.x: simple geometric horizon tests; terrain self-shadowing is a planned upgrade
-mode = "simple"
+# DEM-aware terrain shadowing
+mode = "dem"
+sun = "dem"
 
 [output]
 # Keep computations float. For convenient viewing in DS9, the primary cube is scaled to 0..65535 in float.
 primary_dtype = "float64"          # "float32" or "float64"
 primary_scaled_0_65535 = true
 store_raw_extension = true         # store unscaled physical-ish layer(s) as extra extension if implemented
-write_cube = true                  # write a multi-layer cube in the primary HDU
+write_cube = false                 # write a single 2D image layer (requires only_layer_index)
 bunit = "I/F_moon"                 # unit label for the primary scaled layer (actual physical units are in other layers)
+# Render at camera.nx/ny, then downsample by block-mean to output size (anti-aliased).
+downsample_to_nx = 512
+downsample_to_ny = 512
+only_layer_index = 2              # 2 = IFTOTAL (advanced image)
 
 [comparison]
 # If true, run two renders per call:

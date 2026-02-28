@@ -53,6 +53,30 @@ def _normalize(v: np.ndarray, eps: float = 1e-15) -> np.ndarray:
     return v / n
 
 
+def _downsample_mean2d(arr: np.ndarray, out_ny: int, out_nx: int) -> np.ndarray:
+    """Downsample 2D array by block-mean (NaN-aware), requiring integer factors."""
+    x = np.asarray(arr)
+    if x.ndim != 2:
+        raise ValueError(f"Expected 2D array for downsampling, got shape={x.shape}")
+    in_ny, in_nx = x.shape
+    if (in_ny % out_ny) != 0 or (in_nx % out_nx) != 0:
+        raise ValueError(
+            f"Downsample requires integer factors: in=({in_ny},{in_nx}) out=({out_ny},{out_nx})"
+        )
+    fy = in_ny // out_ny
+    fx = in_nx // out_nx
+    xr = x.reshape(out_ny, fy, out_nx, fx)
+    if np.issubdtype(x.dtype, np.floating):
+        valid = np.isfinite(xr)
+        num = np.where(valid, xr, 0.0).sum(axis=(1, 3), dtype=np.float64)
+        den = valid.sum(axis=(1, 3), dtype=np.float64)
+        out = np.full((out_ny, out_nx), np.nan, dtype=np.float64)
+        m = den > 0.0
+        out[m] = num[m] / den[m]
+        return out
+    return xr.mean(axis=(1, 3), dtype=np.float64)
+
+
 def _moon_lonlat_deg(et: float, moon_center_j2000: np.ndarray, pts_j2000: np.ndarray, moon_frame: str = "IAU_MOON") -> tuple[np.ndarray, np.ndarray]:
     """Convert J2000 vectors (Moon-centred) to Moon-fixed lon/lat in degrees."""
     M = sp.pxform("J2000", str(moon_frame), float(et))
@@ -178,7 +202,10 @@ def _sun_visibility_fraction_dem_extended(
     sun_radius_km: float,
     refine_iter: int = 3,
 ) -> np.ndarray:
-    """Estimate per-point visible fraction of the extended Sun disk using DEM occlusion."""
+    """Estimate per-point visible fraction of the extended Sun disk using DEM occlusion.
+
+    This integrates DEM ray-occlusion across sampled Sun-disk directions for all points.
+    """
     n = pts_j2000.shape[0]
     if n == 0:
         return np.zeros((0,), dtype=np.float64)
@@ -188,46 +215,39 @@ def _sun_visibility_fraction_dem_extended(
     s_dir = _normalize(v)
     alpha = np.arcsin(np.clip(float(sun_radius_km) / np.maximum(d, 1e-9), 0.0, 1.0))
 
-    # Only points near geometric horizon can have partial visibility.
-    radial = _normalize(pts_j2000 - moon_pos_j2000[None, :])
-    dotc = np.einsum("ij,ij->i", radial, s_dir)
-    sin_alpha = np.sin(alpha)
-    full = dotc >= sin_alpha
-    none = dotc <= -sin_alpha
-    partial = ~(full | none)
-
-    vis = np.zeros(n, dtype=np.float64)
-    vis[full] = 1.0
-    vis[none] = 0.0
-    idx_part = np.where(partial)[0]
-    if idx_part.size == 0:
-        return vis
-
     sampler = EarthDiskSampler.create(max(1, int(n_samples)))
     s = sampler.n_samples
 
-    pts_rep = np.repeat(pts_j2000[idx_part], s, axis=0)
-    nor_rep = np.repeat(normals_j2000[idx_part], s, axis=0)
-    dirs_all = np.zeros((idx_part.size * s, 3), dtype=np.float64)
+    vis = np.zeros(n, dtype=np.float64)
+    # Chunk to cap memory for high-resolution renders.
+    chunk = 2048
+    for i0 in range(0, n, chunk):
+        i1 = min(n, i0 + chunk)
+        m = i1 - i0
 
-    for i, k in enumerate(idx_part):
-        omega, _w = sampler.directions(s_dir[k], float(alpha[k]))
-        dirs_all[i * s : (i + 1) * s] = omega
+        pts_rep = np.repeat(pts_j2000[i0:i1], s, axis=0)
+        nor_rep = np.repeat(normals_j2000[i0:i1], s, axis=0)
+        dirs_all = np.zeros((m * s, 3), dtype=np.float64)
 
-    blocked = _sun_shadow_mask_dem_dirs(
-        et=et,
-        moon_pos_j2000=moon_pos_j2000,
-        pts_j2000=pts_rep,
-        normals_j2000=nor_rep,
-        dirs_j2000=dirs_all,
-        moon_dem=moon_dem,
-        moon_frame=moon_frame,
-        mean_radius_km=mean_radius_km,
-        dem_scale=dem_scale,
-        refine_iter=refine_iter,
-    ).reshape(idx_part.size, s)
+        for j in range(m):
+            k = i0 + j
+            omega, _w = sampler.directions(s_dir[k], float(alpha[k]))
+            dirs_all[j * s : (j + 1) * s] = omega
 
-    vis[idx_part] = 1.0 - blocked.mean(axis=1)
+        blocked = _sun_shadow_mask_dem_dirs(
+            et=et,
+            moon_pos_j2000=moon_pos_j2000,
+            pts_j2000=pts_rep,
+            normals_j2000=nor_rep,
+            dirs_j2000=dirs_all,
+            moon_dem=moon_dem,
+            moon_frame=moon_frame,
+            mean_radius_km=mean_radius_km,
+            dem_scale=dem_scale,
+            refine_iter=refine_iter,
+        ).reshape(m, s)
+
+        vis[i0:i1] = 1.0 - blocked.mean(axis=1)
     return np.clip(vis, 0.0, 1.0)
 
 
@@ -289,6 +309,8 @@ def _write_comparison_diff(
     pct_floor_if: float = 1e-5,
     pct_clip_percent: float = 1.0,
 ) -> None:
+    adv_hdr = fits.getheader(advanced_path)
+    leg_hdr = fits.getheader(legacy_path)
     adv = _read_cube_layer(advanced_path, "IFTOTAL")
     leg = _read_cube_layer(legacy_path, "IFTOTAL")
     if adv.shape != leg.shape:
@@ -324,8 +346,15 @@ def _write_comparison_diff(
     }
     header_cards = {
         "RUNMODE": ("comparison_diff", "Render mode"),
+        "CMPTYPE": ("ADV-LEG", "Comparison type"),
         "SRCADV": (_short(str(advanced_path)), "Advanced output"),
         "SRCLEG": (_short(str(legacy_path)), "Legacy output"),
+        "ADVSUNEX": (int(adv_hdr.get("SUNEXT", 0)), "Advanced SUNEXT"),
+        "LEGSUNEX": (int(leg_hdr.get("SUNEXT", 0)), "Legacy SUNEXT"),
+        "ADEARTHP": (int(adv_hdr.get("EARTHPT", 0)), "Advanced EARTHPT"),
+        "LGEARTHP": (int(leg_hdr.get("EARTHPT", 0)), "Legacy EARTHPT"),
+        "ADINCEAR": (int(adv_hdr.get("INCEARTH", 0)), "Advanced INCEARTH"),
+        "LGINCEAR": (int(leg_hdr.get("INCEARTH", 0)), "Legacy INCEARTH"),
         "PCTFLOOR": (float(eps), "Pct floor on |advanced I/F|"),
         "PCTCLIP": (float(clipv), "Pct clip |%| for display"),
     }
@@ -510,6 +539,8 @@ def main(argv: list[str] | None = None) -> None:
     img_alb_moon = np.zeros((ny, nx), dtype=np.float64)
     img_elev_m   = np.zeros((ny, nx), dtype=np.float64)
     img_slope_deg= np.zeros((ny, nx), dtype=np.float64)
+    img_sun_vis  = np.full((ny, nx), np.nan, dtype=np.float64)
+    img_sun_blk  = np.full((ny, nx), np.nan, dtype=np.float64)
     img_selon_deg = np.full((ny, nx), np.nan, dtype=np.float64)
     img_selat_deg = np.full((ny, nx), np.nan, dtype=np.float64)
 
@@ -605,6 +636,8 @@ def main(argv: list[str] | None = None) -> None:
 
         sun_if = np.zeros(pts.shape[0], dtype=np.float64)
         earth_if = np.zeros(pts.shape[0], dtype=np.float64)
+        sun_vis_frac = np.full(pts.shape[0], np.nan, dtype=np.float64)
+        sun_blk_frac = np.full(pts.shape[0], np.nan, dtype=np.float64)
 
         if bool(cfg.illumination.get("include_sun", True)):
             sun_cfg = dict(cfg.raw.get("sun", {}))
@@ -660,6 +693,10 @@ def main(argv: list[str] | None = None) -> None:
                 else:
                     sun_if = lambert_sun_if(pts, normals, sun_pos, A_m).astype(np.float64)
 
+            # By default (if no DEM shadow correction is applied), Sun is fully visible where sun_if was modelled.
+            sun_vis_frac = np.ones(pts.shape[0], dtype=np.float64)
+            sun_blk_frac = np.zeros(pts.shape[0], dtype=np.float64)
+
             # Optional terrain shadows:
             # - point-source Sun: hard shadow mask
             # - extended Sun: DEM-based visible-fraction correction (penumbra approximation)
@@ -681,6 +718,8 @@ def main(argv: list[str] | None = None) -> None:
                         refine_iter=max(1, int(cfg.moon.get("dem_refine_iter", 3))),
                     )
                     sun_if[mask] = 0.0
+                    sun_vis_frac = (~mask).astype(np.float64)
+                    sun_blk_frac = mask.astype(np.float64)
                 else:
                     ext_shadow_samples = int(sun_cfg.get("shadow_disk_samples", max(8, sun_samples // 2)))
                     vis_frac = _sun_visibility_fraction_dem_extended(
@@ -698,6 +737,8 @@ def main(argv: list[str] | None = None) -> None:
                         refine_iter=max(1, int(cfg.moon.get("dem_refine_iter", 3))),
                     )
                     sun_if *= vis_frac
+                    sun_vis_frac = vis_frac.astype(np.float64)
+                    sun_blk_frac = (1.0 - vis_frac).astype(np.float64)
 
         if bool(cfg.illumination.get("include_earthlight", True)):
             earth_albedo_scale = float(cfg.earth.get("albedo", 1.0))  # acts as scale
@@ -749,6 +790,8 @@ def main(argv: list[str] | None = None) -> None:
         img_if_sun[ij_hit[:, 1], ij_hit[:, 0]] = sun_if
         img_if_earth[ij_hit[:, 1], ij_hit[:, 0]] = earth_if
         img_if_total[ij_hit[:, 1], ij_hit[:, 0]] = total_if
+        img_sun_vis[ij_hit[:, 1], ij_hit[:, 0]] = sun_vis_frac
+        img_sun_blk[ij_hit[:, 1], ij_hit[:, 0]] = sun_blk_frac
     else:
         print("No Moon intersections found. Check UTC/site/FOV.")
 
@@ -766,6 +809,8 @@ def main(argv: list[str] | None = None) -> None:
     sun_ang_diam = np.rad2deg(2.0 * np.arcsin(np.clip(sun_radius_km_hdr / max(dist_sm, 1e-9), 0.0, 1.0)))
     sun_ext = int(bool(sun_cfg_hdr.get("extended_disk", False)))
     sun_samples_hdr = int(sun_cfg_hdr.get("disk_samples", 64))
+    sun_shadow_samples_hdr = int(sun_cfg_hdr.get("shadow_disk_samples", max(8, sun_samples_hdr // 2)))
+    shadow_sun_hdr = str(cfg.shadows.get("sun", cfg.shadows.get("mode", "simple"))).lower()
 
     v1 = (sun_pos - moon_pos); v1 /= np.linalg.norm(v1)
     v2 = (obs_pos - moon_pos); v2 /= np.linalg.norm(v2)
@@ -800,6 +845,29 @@ def main(argv: list[str] | None = None) -> None:
     img_rad_sun   = img_if_sun * rad_fac
     img_rad_earth = img_if_earth * rad_fac
 
+    # Optional output downsampling: render high-res, then average to target output size.
+    # This is useful for anti-aliased 512x512 products from higher internal resolution.
+    render_nx, render_ny = nx, ny
+    out_nx = int(cfg.output.get("downsample_to_nx", render_nx) or render_nx)
+    out_ny = int(cfg.output.get("downsample_to_ny", render_ny) or render_ny)
+    if (out_nx <= 0) or (out_ny <= 0):
+        raise ValueError(f"Invalid downsample target: ({out_nx},{out_ny})")
+    if (out_nx != render_nx) or (out_ny != render_ny):
+        img_if_total = _downsample_mean2d(img_if_total, out_ny, out_nx)
+        img_if_sun = _downsample_mean2d(img_if_sun, out_ny, out_nx)
+        img_if_earth = _downsample_mean2d(img_if_earth, out_ny, out_nx)
+        img_rad_total = _downsample_mean2d(img_rad_total, out_ny, out_nx)
+        img_rad_sun = _downsample_mean2d(img_rad_sun, out_ny, out_nx)
+        img_rad_earth = _downsample_mean2d(img_rad_earth, out_ny, out_nx)
+        img_alb_moon = _downsample_mean2d(img_alb_moon, out_ny, out_nx)
+        img_elev_m = _downsample_mean2d(img_elev_m, out_ny, out_nx)
+        img_slope_deg = _downsample_mean2d(img_slope_deg, out_ny, out_nx)
+        img_sun_vis = _downsample_mean2d(img_sun_vis, out_ny, out_nx)
+        img_sun_blk = _downsample_mean2d(img_sun_blk, out_ny, out_nx)
+        img_selon_deg = _downsample_mean2d(img_selon_deg, out_ny, out_nx)
+        img_selat_deg = _downsample_mean2d(img_selat_deg, out_ny, out_nx)
+        nx, ny = out_nx, out_ny
+
     run_mode = "legacy_parallel" if args.legacy_parallel else ("advanced" if args.comparison_child else "single")
     earth_point_hdr = int(bool(cfg.earth.get("point_source", False)))
     header_cards = {
@@ -807,6 +875,10 @@ def main(argv: list[str] | None = None) -> None:
         "DATE-OBS": (utc, "UTC"),
         "JD-OBS": (jd_str, "JD f15.7"),
         "FOV_DEG": (fov_deg, "FOV deg"),
+        "RENDNX": (render_nx, "Rendered NX"),
+        "RENDNY": (render_ny, "Rendered NY"),
+        "OUTNX": (nx, "Output NX"),
+        "OUTNY": (ny, "Output NY"),
         "OBSMODE": (cfg.observer_mode, "Obs mode"),
         "OBSLON": (float(obs_cfg.get("lon_deg", 0.0)), "Lon deg"),
         "OBSLAT": (float(obs_cfg.get("lat_deg", 0.0)), "Lat deg"),
@@ -828,6 +900,8 @@ def main(argv: list[str] | None = None) -> None:
         "SUNSAMP": (sun_samples_hdr, "Sun disk samp"),
         "SUNRADKM": (sun_radius_km_hdr, "Sun R km"),
         "SUNDIA": (sun_ang_diam, "Sun dia deg"),
+        "SHSUN": (shadow_sun_hdr[:16], "Sun shadow mode"),
+        "SUNSHDS": (sun_shadow_samples_hdr, "Sun shadow samp"),
         "INCEARTH": (int(bool(cfg.illumination.get("include_earthlight", True))), "Earth 0/1"),
         "DIST_OM": (dist_om, "Obs-Moon"),
         "DIST_ME": (dist_me, "Moon-Earth"),
@@ -858,6 +932,8 @@ def main(argv: list[str] | None = None) -> None:
         "ALBMOON":  (img_alb_moon, "albedo"),
         "ELEV_M":   (img_elev_m, "elev m (DEM-mean)"),
         "SLOPDEG":  (img_slope_deg, "slope deg"),
+        "SUNVIS":   (img_sun_vis, "Sun vis frac [0..1]"),
+        "SUNBLK":   (img_sun_blk, "Sun blocked frac [0..1]"),
         "SELON":    (img_selon_deg, "deg"),
         "SELAT":    (img_selat_deg, "deg"),
     }
@@ -879,17 +955,36 @@ def main(argv: list[str] | None = None) -> None:
 
 
 
-    write_fits_cube(
-        out_path=out_path,
-        layers=layers,
-        header_cards=header_cards,
-        cube_dtype=primary_dtype,
-        kernel_manifest=kernel_manifest,
-        meta_kernel_path=str(mk),
-        meta_kernel_sha256_prefix=mk_hash,
-    )
-
-    print(f"Wrote cube: {out_path}  (layers: {', '.join(layers.keys())})")
+    write_cube = bool(cfg.output.get("write_cube", True))
+    if write_cube:
+        write_fits_cube(
+            out_path=out_path,
+            layers=layers,
+            header_cards=header_cards,
+            cube_dtype=primary_dtype,
+            kernel_manifest=kernel_manifest,
+            meta_kernel_path=str(mk),
+            meta_kernel_sha256_prefix=mk_hash,
+        )
+        print(f"Wrote cube: {out_path}  (layers: {', '.join(layers.keys())})")
+    else:
+        # Single-image output (2D FITS): write ONLY the selected layer.
+        if len(layers) != 1:
+            raise ValueError(
+                "output.write_cube=false requires exactly one selected layer. "
+                "Set output.only_layer_index (e.g. 2 for IFTOTAL)."
+            )
+        k = next(iter(layers.keys()))
+        arr, unit = layers[k]
+        hdr = fits.Header()
+        for hk, (hv, hc) in header_cards.items():
+            hdr[hk] = (hv, hc)
+        hdr["LAYER"] = (k, "Written layer name")
+        hdr["BUNIT"] = (str(unit)[:68], "Layer unit")
+        fits.PrimaryHDU(data=np.asarray(arr, dtype=np.float64), header=hdr).writeto(
+            out_path, overwrite=True, output_verify="silentfix"
+        )
+        print(f"Wrote image: {out_path}  (layer: {k})")
 
 
 if __name__ == "__main__":

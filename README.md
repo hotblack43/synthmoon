@@ -95,6 +95,34 @@ With `enabled = true`, one render command writes:
 - `<out>_legacy_parallel.fits` (point-source Sun + point-source Earth)
 - `<out>_diff_if.fits` (IFTOTAL difference: advanced - legacy, if `write_diff=true`)
 
+High-resolution render then downsample (recommended for cleaner 512x512 products):
+```toml
+[camera]
+nx = 2048
+ny = 2048
+
+[output]
+downsample_to_nx = 512
+downsample_to_ny = 512
+```
+Downsampling is NaN-aware block averaging and is applied to all physical output layers.
+
+Direct MP4/MOV build (no giant movie FITS), e.g. 60 days at 6-hour steps:
+```bash
+source .venv/bin/activate
+python tools/build_movie_video_hourly.py \
+  --config /tmp/scene_movie_hires.toml \
+  --start-utc 2006-02-13T06:18:45Z \
+  --hours 240 \
+  --step-hours 6 \
+  --fps 24 \
+  --out-mp4 OUTPUT/movie_60d_6h_iftotal.mp4 \
+  --out-mov OUTPUT/movie_60d_6h_iftotal.mov \
+  --workdir /tmp/synthmoon_movie_frames \
+  --tmp-fits /tmp/synthmoon_movie_frame.fits \
+  --crf 18
+```
+
 ## Notes
 
 - Geometry is computed using SPICE via SpiceyPy. Best practice is to load kernels via a meta-kernel (FURNSH).  
