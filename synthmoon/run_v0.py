@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
+import sys
 from pathlib import Path
 import numpy as np
+from astropy.io import fits
 from astropy.time import Time
 import spiceypy as sp
 
@@ -29,6 +32,7 @@ from .illumination import (
     hapke_sun_if,
     hapke_sun_if_extended_disk,
     earthlight_if_tilecached,
+    earthlight_if_point_source,
     HapkeParams,
 )
 from .fits_io import write_fits_cube, scale_to_0_65535_float
@@ -108,6 +112,112 @@ def _sun_shadow_mask_dem(
     return hit
 
 
+def _derive_variant_path(base_out: str | Path, suffix: str) -> Path:
+    p = Path(base_out)
+    return p.with_name(f"{p.stem}{suffix}{p.suffix}")
+
+
+def _run_child_render(
+    *,
+    config_path: str,
+    out_path: Path,
+    utc: str | None,
+    only_layer_index: int | None,
+    legacy_parallel: bool,
+) -> None:
+    cmd = [
+        sys.executable,
+        "-m",
+        "synthmoon.run_v0",
+        "--config",
+        str(config_path),
+        "--out",
+        str(out_path),
+        "--comparison-child",
+    ]
+    if utc:
+        cmd.extend(["--utc", str(utc)])
+    if only_layer_index is not None:
+        cmd.extend(["--only-layer-index", str(int(only_layer_index))])
+    if legacy_parallel:
+        cmd.append("--legacy-parallel")
+    subprocess.run(cmd, check=True)
+
+
+def _read_cube_layer(path: str | Path, layer_name: str) -> np.ndarray:
+    with fits.open(path) as hdul:
+        data = np.asarray(hdul[0].data)
+        hdr = hdul[0].header
+    if data.ndim != 3:
+        raise ValueError(f"{path}: expected FITS cube (NAXIS=3), got ndim={data.ndim}")
+
+    nl = int(hdr.get("NLAYERS", data.shape[0]))
+    if nl != data.shape[0]:
+        nl = data.shape[0]
+
+    for i in range(1, nl + 1):
+        if str(hdr.get(f"LAY{i}", "")).strip().upper() == layer_name.upper():
+            return np.asarray(data[i - 1], dtype=np.float64)
+    raise ValueError(f"{path}: layer {layer_name!r} not found")
+
+
+def _write_comparison_diff(
+    *,
+    advanced_path: Path,
+    legacy_path: Path,
+    diff_path: Path,
+    primary_dtype: str,
+    pct_floor_if: float = 1e-5,
+    pct_clip_percent: float = 1.0,
+) -> None:
+    adv = _read_cube_layer(advanced_path, "IFTOTAL")
+    leg = _read_cube_layer(legacy_path, "IFTOTAL")
+    if adv.shape != leg.shape:
+        raise ValueError(f"Cannot diff IFTOTAL: shape mismatch {adv.shape} vs {leg.shape}")
+
+    diff = adv - leg
+    absdiff = np.abs(diff)
+    # Percent difference in floating-point everywhere.
+    # Use a signed denominator floor to avoid divide-by-zero while preserving sign.
+    eps = max(float(pct_floor_if), 1e-12)
+    den = np.where(np.abs(adv) > eps, adv, np.where(adv >= 0.0, eps, -eps))
+    pct = 100.0 * (leg - adv) / den
+    den_rob = np.maximum(np.maximum(np.abs(adv), np.abs(leg)), eps)
+    pct_robust = 100.0 * (leg - adv) / den_rob
+    abspct = np.abs(pct)
+    abspct_robust = np.abs(pct_robust)
+    clipv = max(float(pct_clip_percent), 1e-12)
+    pct_clip = np.clip(pct, -clipv, clipv)
+    abspct_clip = np.clip(abspct, 0.0, clipv)
+    pct_nonneg = np.where(np.isfinite(pct), np.maximum(pct, 0.0), np.nan)
+    layers = {
+        "ADV_IF": (adv, "I/F advanced"),
+        "LEG_IF": (leg, "I/F legacy"),
+        "DIFF_IF": (diff, "I/F (adv-legacy)"),
+        "ABSDIFF": (absdiff, "I/F abs"),
+        "PCTDIFF": (pct, "% (legacy-adv)/adv"),
+        "PCTROB": (pct_robust, "% (legacy-adv)/max(|adv|,|legacy|)"),
+        "PCTDIFF_CLIP": (pct_clip, f"% clipped to +/-{clipv:g}"),
+        "ABSPCT": (abspct, "% abs"),
+        "ABSPCTROB": (abspct_robust, "% abs robust"),
+        "ABSPCT_CLIP": (abspct_clip, f"% abs clipped to {clipv:g}"),
+        "PCTPOS": (pct_nonneg, "% max((legacy-adv)/adv,0)"),
+    }
+    header_cards = {
+        "RUNMODE": ("comparison_diff", "Render mode"),
+        "SRCADV": (_short(str(advanced_path)), "Advanced output"),
+        "SRCLEG": (_short(str(legacy_path)), "Legacy output"),
+        "PCTFLOOR": (float(eps), "Pct floor on |advanced I/F|"),
+        "PCTCLIP": (float(clipv), "Pct clip |%| for display"),
+    }
+    write_fits_cube(
+        out_path=diff_path,
+        layers=layers,
+        header_cards=header_cards,
+        cube_dtype=primary_dtype,
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="synthmoon renderer (v0.x)")
     ap.add_argument("--config", default="scene.toml", help="Path to scene.toml")
@@ -119,6 +229,8 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="If set to N>0, write only the Nth layer (1-based) instead of the full cube. (E.g. 5=RADTOT)",
     )
+    ap.add_argument("--comparison-child", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--legacy-parallel", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -129,6 +241,66 @@ def main(argv: list[str] | None = None) -> None:
         cfg.raw.setdefault("paths", {})["out_fits"] = str(args.out)
     if args.only_layer_index is not None:
         cfg.raw.setdefault("output", {})["only_layer_index"] = int(args.only_layer_index)
+    if args.legacy_parallel:
+        # Legacy comparison mode: point-source Sun + point-source Earth.
+        # Keep earthlight enabled, but force true point-Earth approximation.
+        cfg.raw.setdefault("sun", {})["extended_disk"] = False
+        cfg.raw.setdefault("illumination", {})["include_earthlight"] = True
+        cfg.raw.setdefault("earth", {})["point_source"] = True
+
+    comparison = dict(cfg.raw.get("comparison", {}))
+    comparison_enabled = bool(comparison.get("enabled", False))
+    if comparison_enabled and (not args.comparison_child):
+        base_out = Path(cfg.paths.get("out_fits", "OUTPUT/synth_moon_cube.fits"))
+        advanced_suffix = str(comparison.get("advanced_suffix", "_advanced"))
+        legacy_suffix = str(comparison.get("legacy_suffix", "_legacy_parallel"))
+        diff_suffix = str(comparison.get("diff_suffix", "_diff_if"))
+        write_diff = bool(comparison.get("write_diff", True))
+        pct_floor_if = float(comparison.get("pct_floor_if", 1e-5))
+        pct_clip_percent = float(comparison.get("pct_clip_percent", 1.0))
+        primary_dtype = str(cfg.output.get("primary_dtype", "float32"))
+
+        out_advanced = _derive_variant_path(base_out, advanced_suffix)
+        out_legacy = _derive_variant_path(base_out, legacy_suffix)
+        out_diff = _derive_variant_path(base_out, diff_suffix)
+
+        only_layer_index = cfg.output.get("only_layer_index", None)
+        try:
+            only_layer_index = int(only_layer_index) if only_layer_index is not None else None
+        except Exception:
+            only_layer_index = None
+
+        print(f"[comparison] advanced -> {out_advanced}")
+        _run_child_render(
+            config_path=str(args.config),
+            out_path=out_advanced,
+            utc=args.utc,
+            only_layer_index=only_layer_index,
+            legacy_parallel=False,
+        )
+        print(f"[comparison] legacy_parallel -> {out_legacy}")
+        _run_child_render(
+            config_path=str(args.config),
+            out_path=out_legacy,
+            utc=args.utc,
+            only_layer_index=only_layer_index,
+            legacy_parallel=True,
+        )
+
+        if write_diff:
+            if only_layer_index is not None:
+                print("[comparison] Skipping diff: output.only_layer_index is set, full IFTOTAL cube is required.")
+            else:
+                _write_comparison_diff(
+                    advanced_path=out_advanced,
+                    legacy_path=out_legacy,
+                    diff_path=out_diff,
+                    primary_dtype=primary_dtype,
+                    pct_floor_if=pct_floor_if,
+                    pct_clip_percent=pct_clip_percent,
+                )
+                print(f"[comparison] diff -> {out_diff}")
+        return
 
 
     kernels_dir = str(cfg.paths.get("spice_kernels_dir", "KERNELS"))
@@ -397,32 +569,45 @@ def main(argv: list[str] | None = None) -> None:
             earth_radius = float(cfg.earth.get("radius_km", 6378.1366))
             n_samples = int(cfg.earth.get("earth_disk_samples", 192))
             tile_px = int(cfg.earth.get("earthlight_tile_px", 16))
+            earth_point = bool(cfg.earth.get("point_source", False))
 
-            earth_if = earthlight_if_tilecached(
-                hit_points=pts,
-                normals=normals,
-                moon_center=moon_pos,
-                sun_pos=sun_pos,
-                earth_pos=earth_pos,
-                et=et,
-                moon_albedo=A_m,
-                earth_albedo=earth_albedo_scale,
-                earth_radius_km=earth_radius,
-                n_samples=n_samples,
-                tile_px=tile_px,
-                ij=ij_hit,
-                nx=nx,
-                ny=ny,
-                earth_map=earth_map,
-                earth_ocean_albedo=float(cfg.earth.get("ocean_albedo", 0.06)),
-                earth_land_albedo=float(cfg.earth.get("land_albedo", 0.25)),
-                earth_cloud_amount=float(cfg.earth.get("cloud_amount", 0.0)),
-                earth_cloud_albedo=float(cfg.earth.get("cloud_albedo", 0.6)),
-                earth_map_interp=str(cfg.earth.get("albedo_map_interp", "nearest")),
-                ocean_glint_strength=float(cfg.earth.get("ocean_glint_strength", 0.0)),
-                ocean_glint_sigma_deg=float(cfg.earth.get("ocean_glint_sigma_deg", 6.0)),
-                ocean_glint_threshold=float(cfg.earth.get("ocean_glint_threshold", 0.12)),
-            ).astype(np.float64)
+            if earth_point:
+                earth_if = earthlight_if_point_source(
+                    hit_points=pts,
+                    normals=normals,
+                    moon_center=moon_pos,
+                    sun_pos=sun_pos,
+                    earth_pos=earth_pos,
+                    moon_albedo=A_m,
+                    earth_albedo=earth_albedo_scale,
+                    earth_radius_km=earth_radius,
+                ).astype(np.float64)
+            else:
+                earth_if = earthlight_if_tilecached(
+                    hit_points=pts,
+                    normals=normals,
+                    moon_center=moon_pos,
+                    sun_pos=sun_pos,
+                    earth_pos=earth_pos,
+                    et=et,
+                    moon_albedo=A_m,
+                    earth_albedo=earth_albedo_scale,
+                    earth_radius_km=earth_radius,
+                    n_samples=n_samples,
+                    tile_px=tile_px,
+                    ij=ij_hit,
+                    nx=nx,
+                    ny=ny,
+                    earth_map=earth_map,
+                    earth_ocean_albedo=float(cfg.earth.get("ocean_albedo", 0.06)),
+                    earth_land_albedo=float(cfg.earth.get("land_albedo", 0.25)),
+                    earth_cloud_amount=float(cfg.earth.get("cloud_amount", 0.0)),
+                    earth_cloud_albedo=float(cfg.earth.get("cloud_albedo", 0.6)),
+                    earth_map_interp=str(cfg.earth.get("albedo_map_interp", "nearest")),
+                    ocean_glint_strength=float(cfg.earth.get("ocean_glint_strength", 0.0)),
+                    ocean_glint_sigma_deg=float(cfg.earth.get("ocean_glint_sigma_deg", 6.0)),
+                    ocean_glint_threshold=float(cfg.earth.get("ocean_glint_threshold", 0.12)),
+                ).astype(np.float64)
 
         total_if = sun_if + earth_if
 
@@ -480,7 +665,10 @@ def main(argv: list[str] | None = None) -> None:
     img_rad_sun   = img_if_sun * rad_fac
     img_rad_earth = img_if_earth * rad_fac
 
+    run_mode = "legacy_parallel" if args.legacy_parallel else ("advanced" if args.comparison_child else "single")
+    earth_point_hdr = int(bool(cfg.earth.get("point_source", False)))
     header_cards = {
+        "RUNMODE": (run_mode, "Render mode"),
         "DATE-OBS": (utc, "UTC"),
         "JD-OBS": (jd_str, "JD f15.7"),
         "FOV_DEG": (fov_deg, "FOV deg"),
@@ -498,6 +686,7 @@ def main(argv: list[str] | None = None) -> None:
         "DEMREFI": (dem_refine_iter if dem_path else 0, "DEM refine"),
         "ALBEARTH": (float(cfg.earth.get("albedo", 1.0)), "Earth alb scl"),
         "EDSAMP": (int(cfg.earth.get("earth_disk_samples", 192)), "E samp"),
+        "EARTHPT": (earth_point_hdr, "Earth point 0/1"),
         "TILEPX": (int(cfg.earth.get("earthlight_tile_px", 16)), "Tile px"),
         "INCSUN": (int(bool(cfg.illumination.get("include_sun", True))), "Sun 0/1"),
         "SUNEXT": (sun_ext, "Sun ext 0/1"),

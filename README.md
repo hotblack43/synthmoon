@@ -4,6 +4,7 @@ This is a **version 0** reference implementation for generating a synthetic 512Ã
 with **Lambert** reflectance, **finite-distance SPICE geometry**, and optional **extended-source earthlight**.
 
 It writes a 16-bit FITS primary image using BSCALE/BZERO and (optionally) a float32 extension.
+Version notes are tracked in `CHANGELOG.md`.
 
 ## Quick start
 
@@ -77,6 +78,22 @@ Lambert vs Hapke regression check:
 ```bash
 ./tools/regression_compare_lambert_hapke.sh
 ```
+
+Advanced vs legacy-parallel comparison (two outputs + optional diff in one run):
+```toml
+[comparison]
+enabled = true
+write_diff = true
+pct_floor_if = 1.0e-5   # percent diff only where |IFTOTAL_advanced| > floor
+pct_clip_percent = 1.0  # clipped display-friendly percent layer (+/- this value)
+advanced_suffix = "_advanced"
+legacy_suffix = "_legacy_parallel"
+diff_suffix = "_diff_if"
+```
+With `enabled = true`, one render command writes:
+- `<out>_advanced.fits` (your current model)
+- `<out>_legacy_parallel.fits` (point-source Sun + point-source Earth)
+- `<out>_diff_if.fits` (IFTOTAL difference: advanced - legacy, if `write_diff=true`)
 
 ## Notes
 

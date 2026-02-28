@@ -422,3 +422,64 @@ def earthlight_if_tilecached(
             out[idx] = A_m[idx] * (E / F_moon[idx])
 
     return out
+
+
+def earthlight_if_point_source(
+    hit_points: np.ndarray,
+    normals: np.ndarray,
+    moon_center: np.ndarray,
+    sun_pos: np.ndarray,
+    earth_pos: np.ndarray,
+    moon_albedo: np.ndarray | float,
+    earth_albedo: float,
+    earth_radius_km: float,
+) -> np.ndarray:
+    """Point-source Earthshine approximation.
+
+    This is a true point-Earth model (no Earth-disk quadrature): Earthshine arrives
+    from a single direction (Earth center), with brightness scaled by Lambert-sphere
+    phase and inverse-square range.
+    """
+    N = hit_points.shape[0]
+    out = np.zeros(N, dtype=np.float64)
+
+    # Direction to Earth and visibility from each lunar point.
+    e_vec = earth_pos[None, :] - hit_points
+    d_em = np.linalg.norm(e_vec, axis=1)
+    e_dir = e_vec / np.maximum(d_em[:, None], 1e-15)
+    radial = _normalize(hit_points - moon_center[None, :])
+    vis = np.einsum("ij,ij->i", radial, e_dir) > 0.0
+    if not np.any(vis):
+        return out
+
+    # Lunar incidence from the Earth direction.
+    mu_m = np.maximum(0.0, np.einsum("ij,ij->i", normals, e_dir))
+
+    # Earth phase angle as seen from the Moon point.
+    s_e = _normalize(sun_pos[None, :] - earth_pos[None, :])  # (1,3)
+    m_e = _normalize(hit_points - earth_pos[None, :])        # (N,3)
+    cos_g = np.clip(np.einsum("ij,ij->i", np.repeat(s_e, N, axis=0), m_e), -1.0, 1.0)
+    g = np.arccos(cos_g)
+
+    # Lambert-sphere phase function (normalised so Phi(0)=1).
+    phi = (np.sin(g) + (np.pi - g) * np.cos(g)) / np.pi
+    phi = np.clip(phi, 0.0, 1.0)
+
+    # Solar irradiance scaling at Earth and at Moon points (F(1 AU)=1).
+    f_e = float(inv_solar_irradiance_scale(earth_pos, sun_pos))
+    f_m = np.array([inv_solar_irradiance_scale(hit_points[k], sun_pos) for k in range(N)], dtype=float)
+
+    # Irradiance on Moon facet from point-Earth source:
+    # E = (2/3) * A_E * F_E * Phi(g) * (R_E/d)^2 * mu_m
+    geom = (float(earth_radius_km) / np.maximum(d_em, 1e-12)) ** 2
+    E = (2.0 / 3.0) * float(earth_albedo) * f_e * phi * geom * mu_m
+    E = np.where(vis, E, 0.0)
+
+    if np.isscalar(moon_albedo):
+        A_m = float(moon_albedo)
+        out = A_m * (E / np.maximum(f_m, 1e-12))
+    else:
+        A_m = np.asarray(moon_albedo, dtype=float)
+        out = A_m * (E / np.maximum(f_m, 1e-12))
+
+    return out

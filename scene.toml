@@ -33,7 +33,7 @@ out_fits = "OUTPUT/synth_moon_v0.fits"
 
 [moon]
 radius_km = 1737.4
-brdf = "lambert"     # later: "hapke"
+brdf = "hapke"     # "lambert" | "hapke"
 albedo_map_fits = "DATA/moon_albedo_lroc_wac643_016ppd_mean0p12.fits"
 albedo_map_lon_mode = "-180_180"
 albedo_map_scale = 1.0
@@ -116,8 +116,20 @@ mode = "simple"
 
 [output]
 # Keep computations float. For convenient viewing in DS9, the primary cube is scaled to 0..65535 in float.
-primary_dtype = "float32"          # "float32" or "float64"
+primary_dtype = "float64"          # "float32" or "float64"
 primary_scaled_0_65535 = true
 store_raw_extension = true         # store unscaled physical-ish layer(s) as extra extension if implemented
 write_cube = true                  # write a multi-layer cube in the primary HDU
 bunit = "I/F_moon"                 # unit label for the primary scaled layer (actual physical units are in other layers)
+
+[comparison]
+# If true, run two renders per call:
+# 1) "advanced": current config
+# 2) "legacy_parallel": point-source Sun + point-source Earth
+enabled = false
+write_diff = true
+pct_floor_if = 1.0e-5
+pct_clip_percent = 1.0
+advanced_suffix = "_advanced"
+legacy_suffix = "_legacy_parallel"
+diff_suffix = "_diff_if"
