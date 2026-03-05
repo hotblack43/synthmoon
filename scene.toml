@@ -24,7 +24,9 @@ nx = 2048
 ny = 2048
 fov_deg = 1.0
 roll_deg = 0.0
-pointing = "moon_center"  # currently supported: "moon_center"
+pointing = "moon_center"  # moon_center | moon_limb_* | moon_limb_prograde | orbit_path(prograde/velocity)
+up_mode = "north"         # north | surface_down
+limb_offset_scale = 1.0   # 1.0=exact limb, <1 inward, >1 slightly beyond limb (max 1.5)
 
 [paths]
 spice_kernels_dir = "KERNELS"

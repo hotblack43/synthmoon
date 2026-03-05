@@ -44,6 +44,15 @@ Sources (NAIF):
 
 Edit `scene.toml`.
 
+Camera pointing modes:
+```toml
+[camera]
+pointing = "moon_center"      # default
+# or: "moon_limb_east" | "moon_limb_west" | "moon_limb_north" | "moon_limb_south" | "moon_limb_prograde" | "orbit_path"
+up_mode = "north"             # or "surface_down" for outreach framing
+limb_offset_scale = 1.0       # 1.0 = limb
+```
+
 ### 4) Render
 
 ```bash

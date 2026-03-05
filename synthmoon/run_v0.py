@@ -77,6 +77,128 @@ def _downsample_mean2d(arr: np.ndarray, out_ny: int, out_nx: int) -> np.ndarray:
     return xr.mean(axis=(1, 3), dtype=np.float64)
 
 
+def _tangent_basis(boresight_u: np.ndarray, north_hint_u: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return (right, up) unit vectors in the plane tangent to boresight."""
+    up = north_hint_u - np.dot(north_hint_u, boresight_u) * boresight_u
+    n_up = float(np.linalg.norm(up))
+    if n_up < 1e-12:
+        # Fallback when boresight is near north_hint.
+        x = np.array([1.0, 0.0, 0.0], dtype=float)
+        up = x - np.dot(x, boresight_u) * boresight_u
+        n_up = float(np.linalg.norm(up))
+        if n_up < 1e-12:
+            y = np.array([0.0, 1.0, 0.0], dtype=float)
+            up = y - np.dot(y, boresight_u) * boresight_u
+            n_up = float(np.linalg.norm(up))
+    up = up / max(n_up, 1e-12)
+    right = np.cross(boresight_u, up)
+    right = right / max(float(np.linalg.norm(right)), 1e-12)
+    return right, up
+
+
+def _apply_pointing_mode(
+    *,
+    boresight_u: np.ndarray,
+    moon_ang_radius_deg: float,
+    north_hint_u: np.ndarray,
+    pointing_mode: str,
+    limb_offset_scale: float,
+) -> np.ndarray:
+    """
+    Optionally offset boresight toward lunar limb.
+
+    Supported modes:
+      - moon_center (default)
+      - moon_limb_east / moon_limb_west / moon_limb_north / moon_limb_south
+      - orbit_path / prograde / velocity
+      - moon_limb_prograde (auto limb toward velocity direction)
+    """
+    mode = str(pointing_mode).strip().lower()
+    if mode in ("moon_center", "center", ""):
+        return boresight_u
+    if mode in ("orbit_path", "prograde", "velocity"):
+        return boresight_u
+
+    right, up = _tangent_basis(boresight_u, north_hint_u)
+    axis = None
+    if mode in ("moon_limb_east", "limb_east", "east"):
+        axis = right
+    elif mode in ("moon_limb_west", "limb_west", "west"):
+        axis = -right
+    elif mode in ("moon_limb_north", "limb_north", "north"):
+        axis = up
+    elif mode in ("moon_limb_south", "limb_south", "south"):
+        axis = -up
+    else:
+        raise ValueError(
+            f"Unknown camera.pointing={pointing_mode!r}. "
+            "Supported: moon_center, moon_limb_east, moon_limb_west, moon_limb_north, moon_limb_south, moon_limb_prograde, orbit_path"
+        )
+
+    scale = float(limb_offset_scale)
+    alpha_deg = max(0.0, min(1.5, scale)) * float(moon_ang_radius_deg)
+    a = np.deg2rad(alpha_deg)
+    out = boresight_u * np.cos(a) + axis * np.sin(a)
+    out = out / max(float(np.linalg.norm(out)), 1e-12)
+    return out
+
+
+def _camera_up_hint(
+    *,
+    up_mode: str,
+    north_u: np.ndarray,
+    boresight_u: np.ndarray,
+    moon_center_from_obs_u: np.ndarray,
+) -> np.ndarray:
+    """
+    Select camera up-hint strategy.
+
+    up_mode:
+      - north: projected lunar north (legacy behavior)
+      - surface_down: make lunar surface trend toward frame bottom for limb/off-center views
+    """
+    mode = str(up_mode).strip().lower()
+    if mode in ("north", ""):
+        return north_u
+
+    if mode in ("surface_down", "lunar_surface_down", "horizon"):
+        # Direction in image plane toward Moon center.
+        down = moon_center_from_obs_u - np.dot(moon_center_from_obs_u, boresight_u) * boresight_u
+        n_down = float(np.linalg.norm(down))
+        if n_down > 1e-12:
+            # Camera +Y is "up", so use opposite of "down-to-center" to keep the bulk of the Moon low in frame.
+            return -down / n_down
+        return north_u
+
+    raise ValueError(f"Unknown camera.up_mode={up_mode!r}. Supported: north, surface_down")
+
+
+def _boresight_limb_prograde(
+    *,
+    boresight_center_u: np.ndarray,
+    moon_ang_radius_deg: float,
+    north_u: np.ndarray,
+    vel_u: np.ndarray,
+    limb_offset_scale: float,
+) -> np.ndarray:
+    """
+    Point to lunar limb in the direction of projected velocity on the image plane.
+    Keeps Moon in frame while giving prograde-looking outreach framing.
+    """
+    right, up = _tangent_basis(boresight_center_u, north_u)
+    v_tan = vel_u - np.dot(vel_u, boresight_center_u) * boresight_center_u
+    nv = float(np.linalg.norm(v_tan))
+    if nv < 1e-12:
+        axis = right
+    else:
+        axis = v_tan / nv
+    scale = float(limb_offset_scale)
+    alpha_deg = max(0.0, min(1.5, scale)) * float(moon_ang_radius_deg)
+    a = np.deg2rad(alpha_deg)
+    out = boresight_center_u * np.cos(a) + axis * np.sin(a)
+    return out / max(float(np.linalg.norm(out)), 1e-12)
+
+
 def _moon_lonlat_deg(et: float, moon_center_j2000: np.ndarray, pts_j2000: np.ndarray, moon_frame: str = "IAU_MOON") -> tuple[np.ndarray, np.ndarray]:
     """Convert J2000 vectors (Moon-centred) to Moon-fixed lon/lat in degrees."""
     M = sp.pxform("J2000", str(moon_frame), float(et))
@@ -511,10 +633,43 @@ def main(argv: list[str] | None = None) -> None:
     # Camera basis
     boresight = moon_pos - obs_pos
     dist_om = float(np.linalg.norm(boresight))
-    boresight_u = boresight / dist_om
-
+    boresight_center_u = boresight / dist_om
+    moon_ang_radius_deg = np.rad2deg(np.arcsin(np.clip(float(cfg.moon.get("radius_km", 1737.4)) / dist_om, 0.0, 1.0)))
     north = lunar_north_in_j2000(et, moon_frame=moon_frame)
-    R = camera_basis_from_boresight_and_up(boresight_u, north, float(cfg.camera.get("roll_deg", 0.0)))
+    pointing_mode = str(cfg.camera.get("pointing", "moon_center"))
+    up_mode = str(cfg.camera.get("up_mode", "north"))
+    limb_offset_scale = float(cfg.camera.get("limb_offset_scale", 1.0))
+    mode_l = pointing_mode.strip().lower()
+    if mode_l in ("orbit_path", "prograde", "velocity"):
+        v = np.asarray(obs_state[3:], dtype=float)
+        nv = float(np.linalg.norm(v))
+        boresight_u = (v / nv) if nv > 1e-12 else boresight_center_u
+    elif mode_l in ("moon_limb_prograde", "limb_prograde", "prograde_limb", "track_limb"):
+        v = np.asarray(obs_state[3:], dtype=float)
+        nv = float(np.linalg.norm(v))
+        vel_u = (v / nv) if nv > 1e-12 else np.array([1.0, 0.0, 0.0], dtype=float)
+        boresight_u = _boresight_limb_prograde(
+            boresight_center_u=boresight_center_u,
+            moon_ang_radius_deg=moon_ang_radius_deg,
+            north_u=north,
+            vel_u=vel_u,
+            limb_offset_scale=limb_offset_scale,
+        )
+    else:
+        boresight_u = _apply_pointing_mode(
+            boresight_u=boresight_center_u,
+            moon_ang_radius_deg=moon_ang_radius_deg,
+            north_hint_u=north,
+            pointing_mode=pointing_mode,
+            limb_offset_scale=limb_offset_scale,
+        )
+    up_hint = _camera_up_hint(
+        up_mode=up_mode,
+        north_u=north,
+        boresight_u=boresight_u,
+        moon_center_from_obs_u=boresight_center_u,
+    )
+    R = camera_basis_from_boresight_and_up(boresight_u, up_hint, float(cfg.camera.get("roll_deg", 0.0)))
 
     nx = int(cfg.camera.get("nx", 512))
     ny = int(cfg.camera.get("ny", 512))
@@ -522,9 +677,11 @@ def main(argv: list[str] | None = None) -> None:
 
     # Base Moon radius (km)
     Rm = float(cfg.moon.get("radius_km", 1737.4))
-
-    moon_ang_radius_deg = np.rad2deg(np.arcsin(np.clip(Rm / dist_om, 0.0, 1.0)))
-    bbox = moon_roi_bbox(nx, ny, boresight_u, moon_ang_radius_deg, fov_deg, margin_px=12)
+    if str(pointing_mode).strip().lower() in ("moon_center", "center", ""):
+        bbox = moon_roi_bbox(nx, ny, boresight_u, moon_ang_radius_deg, fov_deg, margin_px=12)
+    else:
+        # Limb/offset pointing can move the lunar disk far off center; keep full-frame ROI to avoid clipping.
+        bbox = (0, nx, 0, ny)
 
     ij, dirs = pixel_rays(nx, ny, fov_deg, R, bbox)
     origins = np.repeat(obs_pos[None, :], dirs.shape[0], axis=0)
@@ -911,6 +1068,9 @@ def main(argv: list[str] | None = None) -> None:
         "FSUNM": (fsun_moon, "Fsun Moon"),
         "RADFAC": (rad_fac, "Fsun/pi"),
         "MFRAME": (moon_frame, "Moon-fixed frame"),
+        "POINTING": (pointing_mode[:16], "Camera pointing"),
+        "UPMODE": (up_mode[:16], "Camera up-mode"),
+        "LIMBOFF": (limb_offset_scale, "Limb offset scale"),
         "LLCONV": ("arctan2", "Lon=(-180,180], lat=asin(z/r)"),
         "MKFILE": (Path(mk).name, "MK"),
         "KCOUNT": (len(kernels), "K n"),
