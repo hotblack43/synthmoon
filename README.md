@@ -1,7 +1,8 @@
 # synthmoon v0
 
-This is a **version 0** reference implementation for generating a synthetic 512×512 Moon image (1° FOV)
-with **Lambert** reflectance, **finite-distance SPICE geometry**, and optional **extended-source earthlight**.
+This is a **version 0** reference implementation for generating synthetic Moon images (including 512x512 products)
+with **finite-distance SPICE geometry**, Moon BRDF options (**Lambert** or **Hapke**), optional **LOLA DEM**
+terrain/shadowing, and optional **extended-source earthlight**.
 
 It writes a 16-bit FITS primary image using BSCALE/BZERO and (optionally) a float32 extension.
 Version notes are tracked in `CHANGELOG.md`.
@@ -62,6 +63,70 @@ python -m synthmoon.run_v0 --config scene.toml
 ```
 
 Output FITS is written to `OUTPUT/` by default.
+
+### 5) Single image from Earth lon/lat at a given Julian Day
+
+The renderer accepts UTC as input (`time.utc` or `--utc`).  
+Use Earth-site observer coordinates in `scene.toml`:
+
+```toml
+[observer]
+mode = "earth_site"
+lon_deg = -155.5763
+lat_deg = 19.5362
+height_m = 3397.0
+```
+
+Run one image for a specific UTC:
+
+```bash
+uv run python -m synthmoon.run_v0 \
+  --config scene.toml \
+  --utc 2006-02-17T06:18:45Z \
+  --out OUTPUT/synth_moon_single.fits
+```
+
+If your input is a Julian Day, convert JD -> UTC first, then render:
+
+```bash
+JD=2453783.7623264
+UTC=$(uv run python -c "from astropy.time import Time; print(Time(${JD}, format='jd', scale='utc').isot + 'Z')")
+uv run python -m synthmoon.run_v0 --config scene.toml --utc "$UTC" --out OUTPUT/synth_moon_from_jd.fits
+```
+
+`run_v0` writes `DATE-OBS` and `JD-OBS` in FITS headers, so the exact UTC/JD used is recorded in output.
+
+Advanced Moon render (Hapke + DEM + DEM solar shadows) from Earth lon/lat:
+
+```toml
+[moon]
+brdf = "hapke"
+dem_fits = "DATA/moon_dem_lola_ldem16_m.fits"
+dem_refine_iter = 3
+
+[sun]
+extended_disk = true
+
+[shadows]
+mode = "dem"
+sun = "dem"
+```
+
+```bash
+uv run python -m synthmoon.run_v0 \
+  --config scene.toml \
+  --utc 2006-02-17T06:18:45Z \
+  --out OUTPUT/synth_moon_advanced_dem_hapke.fits
+```
+
+One-command wrapper (UTC or JD + lon/lat/alt from CLI):
+
+```bash
+tools/go_single_image.sh \
+  --lon -155.5763 --lat 19.5362 --alt-m 3397 \
+  --jd 2453783.7623264 \
+  --out OUTPUT/synth_moon_single_from_cli.fits
+```
 
 Regression check for earthlight layers (IF_EARTH/RAD_EAR non-zero at a known UTC):
 ```bash
