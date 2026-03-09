@@ -128,6 +128,21 @@ tools/go_single_image.sh \
   --out OUTPUT/synth_moon_single_from_cli.fits
 ```
 
+One-command Moon/Earth pair wrapper (EO-aware):
+
+```bash
+tools/go_earth_moon_pair.sh \
+  --lon -155.5763 --lat 19.5362 --alt-m 3397 \
+  --jd 2455748.7651276 \
+  --out-dir OUTPUT
+```
+
+This script:
+- renders the matching Earth and Moon pair for the given UTC/JD and observer site
+- uses the recommended EO Earth workflow
+- checks whether the needed daily/yearly EO products are already on disk
+- if any EO input is missing, it stops and prints the exact `uv run` commands needed to download/extract the missing files
+
 Synthetic Earth FITS (for Earthlight diagnostics):
 
 ```bash

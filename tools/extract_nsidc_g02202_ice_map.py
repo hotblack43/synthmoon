@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import subprocess
 import tempfile
 from pathlib import Path
@@ -76,8 +77,16 @@ def main() -> None:
     ap.add_argument("--resample", default="bilinear", choices=("near", "bilinear", "cubic"), help="GDAL warp resampling")
     args = ap.parse_args()
 
-    north_nc = Path(args.north_nc)
-    south_nc = Path(args.south_nc)
+    def _resolve_one(pattern: str) -> Path:
+        matches = sorted(glob.glob(pattern))
+        if matches:
+            if len(matches) > 1:
+                raise SystemExit(f"Pattern matched multiple files; be specific or pass one file only: {matches}")
+            return Path(matches[0])
+        return Path(pattern)
+
+    north_nc = _resolve_one(args.north_nc)
+    south_nc = _resolve_one(args.south_nc)
     out_fits = Path(args.out_fits)
     out_fits.parent.mkdir(parents=True, exist_ok=True)
 
