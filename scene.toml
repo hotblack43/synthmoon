@@ -170,11 +170,12 @@ primary_dtype = "float64"          # "float32" or "float64"
 primary_scaled_0_65535 = true
 store_raw_extension = true         # store unscaled physical-ish layer(s) as extra extension if implemented
 write_cube = false                 # write a single 2D image layer (requires only_layer_index)
+cube_layer_names = ["RADTOT", "SUNLIT"]   # for cube output: keep only compact Moon layers, in this order
 bunit = "I/F_moon"                 # unit label for the primary scaled layer (actual physical units are in other layers)
 # Render at camera.nx/ny, then downsample by block-mean to output size (anti-aliased).
 downsample_to_nx = 512
 downsample_to_ny = 512
-only_layer_index = 2              # 2 = IFTOTAL (advanced image)
+only_layer_index = 5              # 5 = RADTOT (Moon radiance in physical units)
 
 [comparison]
 # If true, run two renders per call:

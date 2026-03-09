@@ -387,7 +387,8 @@ def main() -> None:
     a_eff = (1.0 - cloud_frac) * a_surface + cloud_frac * cloud_alb
     a_eff = np.clip(a_eff, 0.0, 1.0) * float(cfg.earth.get("albedo", 1.0))
 
-    fsun = np.array([inv_solar_irradiance_scale(pv[i], sun_pos) for i in range(pv.shape[0])], dtype=np.float64)
+    tsi_1au = float(cfg.output.get("tsi_w_m2", 1361.0))
+    fsun = tsi_1au * np.array([inv_solar_irradiance_scale(pv[i], sun_pos) for i in range(pv.shape[0])], dtype=np.float64)
 
     # Lambert Earth radiance proxy toward observer:
     # L = (A_eff/pi) * F_sun * mu0
@@ -415,7 +416,7 @@ def main() -> None:
 
     # Put physical-units radiance first for convenience in FITS viewers.
     layers = {
-        "RAD_EAR": (layer_rad, "W m-2 sr-1 (scaled)"),
+        "RAD_EAR": (layer_rad, "W m-2 sr-1"),
         "IF_EARTH": (layer_if, "I/F proxy"),
         "ECLASS": (layer_cls, "class id"),
         "A_EFF": (layer_ae, "albedo"),
@@ -423,7 +424,7 @@ def main() -> None:
         "CLOUDF": (layer_cf, "fraction"),
         "MU0": (layer_mu0, "cos(sun)"),
         "MUV": (layer_muv, "cos(view)"),
-        "FSUN": (layer_fsun, "F/F_1AU"),
+        "FSUN": (layer_fsun, "W m-2"),
         "ELON": (layer_lon, "deg"),
         "ELAT": (layer_lat, "deg"),
         "MASK": (layer_mask, "1=disk"),
@@ -442,6 +443,7 @@ def main() -> None:
         "NY": (ny, "Output height"),
         "EARTRAD": (re_km, "Earth radius km"),
         "ALBSCL": (float(cfg.earth.get("albedo", 1.0)), "Earth albedo scale"),
+        "TSI1AU": (tsi_1au, "TSI 1 AU"),
         "CLOUDAMT": (cloud_amt, "Cloud amount"),
         "CLOUDTAU": (tau, "Cloud optical thickness"),
         "CLOUDK": (tau_k, "Cloud tau gain"),

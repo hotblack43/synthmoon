@@ -1185,11 +1185,33 @@ def main(argv: list[str] | None = None) -> None:
         "ALBMOON":  (img_alb_moon, "albedo"),
         "ELEV_M":   (img_elev_m, "elev m (DEM-mean)"),
         "SLOPDEG":  (img_slope_deg, "slope deg"),
+        # Explicit sunlit-fraction diagnostic for downstream cube consumers.
+        "SUNLIT":   (img_sun_vis, "Sunlit frac [0..1]"),
         "SUNVIS":   (img_sun_vis, "Sun vis frac [0..1]"),
         "SUNBLK":   (img_sun_blk, "Sun blocked frac [0..1]"),
         "SELON":    (img_selon_deg, "deg"),
         "SELAT":    (img_selat_deg, "deg"),
     }
+
+    write_cube = bool(cfg.output.get("write_cube", True))
+
+    cube_layer_names = cfg.output.get("cube_layer_names", None)
+    if write_cube and (cube_layer_names is not None):
+        if not isinstance(cube_layer_names, (list, tuple)):
+            raise ValueError("output.cube_layer_names must be a list of layer names")
+        selected_layers: dict[str, tuple[np.ndarray, str]] = {}
+        for name in cube_layer_names:
+            k = str(name).strip()
+            if k not in layers:
+                raise ValueError(
+                    f"output.cube_layer_names contains unknown layer {k!r}. "
+                    f"Available layers: {list(layers.keys())}"
+                )
+            selected_layers[k] = layers[k]
+        if not selected_layers:
+            raise ValueError("output.cube_layer_names selected no layers")
+        layers = selected_layers
+        header_cards["CUBELAY"] = (",".join(layers.keys())[:68], "Selected cube layers")
 
     # Optional: write only a single layer (1-based index) to keep output small for long sequences.
     only_i = cfg.output.get("only_layer_index", None)
@@ -1208,7 +1230,6 @@ def main(argv: list[str] | None = None) -> None:
 
 
 
-    write_cube = bool(cfg.output.get("write_cube", True))
     if write_cube:
         write_fits_cube(
             out_path=out_path,
