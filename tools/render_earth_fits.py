@@ -8,6 +8,7 @@ import sys
 import numpy as np
 import spiceypy as sp
 from astropy.time import Time
+from astropy.io import fits
 
 try:
     from synthmoon.config import load_config
@@ -83,6 +84,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--out", default=None, help="Output FITS path")
     ap.add_argument("--nx", type=int, default=1024, help="Output width")
     ap.add_argument("--ny", type=int, default=1024, help="Output height")
+    ap.add_argument("--only-layer-index", type=int, default=None, help="If set to N>0, write only the Nth layer (1-based)")
     ap.add_argument(
         "--view",
         default="moon_center",
@@ -454,8 +456,22 @@ def main() -> None:
         "ECLSMAP": (Path(str(earth_class_map_path)).name if earth_class_map_path else "", "Earth class map"),
     }
 
-    write_fits_cube(out_path=out, layers=layers, header_cards=hdr, cube_dtype="float64")
-    print(f"Wrote Earth cube: {out}  (layers: {', '.join(layers.keys())})")
+    if args.only_layer_index is not None:
+        idx = int(args.only_layer_index)
+        if idx <= 0 or idx > len(layers):
+            raise SystemExit(f"--only-layer-index must be in 1..{len(layers)}")
+        name = list(layers.keys())[idx - 1]
+        arr, unit = layers[name]
+        h = fits.Header()
+        for k, (v, c) in hdr.items():
+            h[k] = (v, c)
+        h["LAYER"] = (name, "Selected layer name")
+        h["BUNIT"] = (unit[:68], "Selected layer unit")
+        fits.PrimaryHDU(data=np.asarray(arr, dtype=np.float64), header=h).writeto(out, overwrite=True, output_verify="silentfix")
+        print(f"Wrote Earth image: {out}  (layer: {name})")
+    else:
+        write_fits_cube(out_path=out, layers=layers, header_cards=hdr, cube_dtype="float64")
+        print(f"Wrote Earth cube: {out}  (layers: {', '.join(layers.keys())})")
 
 
 if __name__ == "__main__":

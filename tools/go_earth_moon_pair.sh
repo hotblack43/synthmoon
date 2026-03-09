@@ -342,6 +342,7 @@ echo "Config: ${TMP_CFG} (temporary)"
 UV_CACHE_DIR=/tmp/uvcache uv run python tools/render_earth_fits.py \
   --config "$TMP_CFG" \
   --utc "$UTC_CANON" \
+  --only-layer-index 1 \
   --out "$EARTH_OUT"
 
 UV_CACHE_DIR=/tmp/uvcache uv run python -m synthmoon.run_v0 \
