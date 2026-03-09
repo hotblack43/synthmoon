@@ -5,6 +5,7 @@ DATA/moon_albedo_*.fits
 *.tif
 *.nc
 *.hdf
+*.aux.xml
 *.tiff
 synthmoon_v0_patch*.zip
 OLD/
