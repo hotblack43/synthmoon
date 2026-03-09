@@ -714,6 +714,16 @@ def main(argv: list[str] | None = None) -> None:
         earth_lon_mode = str(cfg.earth.get("albedo_map_lon_mode", "0_360"))
         earth_map = EquirectMap.load_fits(earth_map_path, lon_mode=earth_lon_mode, fill=float(cfg.earth.get("albedo_map_fill", 0.30)))
 
+    earth_class_map = None
+    earth_class_map_path = cfg.earth.get("class_map_fits", None)
+    if earth_class_map_path:
+        earth_class_lon_mode = str(cfg.earth.get("class_map_lon_mode", str(cfg.earth.get("albedo_map_lon_mode", "0_360"))))
+        earth_class_map = EquirectMap.load_fits(
+            earth_class_map_path,
+            lon_mode=earth_class_lon_mode,
+            fill=float(cfg.earth.get("class_map_fill", -999.0)),
+        )
+
     # Optional lunar DEM (absolute radius) for orography
     moon_dem = None
     dem_path = cfg.moon.get("dem_fits", None)
@@ -932,14 +942,33 @@ def main(argv: list[str] | None = None) -> None:
                     nx=nx,
                     ny=ny,
                     earth_map=earth_map,
+                    earth_class_map=earth_class_map,
+                    earth_class_interp=str(cfg.earth.get("class_map_interp", "nearest")),
+                    earth_class_ocean_values=tuple(float(v) for v in cfg.earth.get("class_ocean_values", [0])),
+                    earth_class_land_values=tuple(float(v) for v in cfg.earth.get("class_land_values", [1])),
+                    earth_class_ice_values=tuple(float(v) for v in cfg.earth.get("class_ice_values", [2])),
                     earth_ocean_albedo=float(cfg.earth.get("ocean_albedo", 0.06)),
                     earth_land_albedo=float(cfg.earth.get("land_albedo", 0.25)),
                     earth_cloud_amount=float(cfg.earth.get("cloud_amount", 0.0)),
                     earth_cloud_albedo=float(cfg.earth.get("cloud_albedo", 0.6)),
+                    earth_cloud_tau=float(cfg.earth.get("cloud_tau", 1.0)),
+                    earth_cloud_tau_k=float(cfg.earth.get("cloud_tau_k", 1.0)),
                     earth_map_interp=str(cfg.earth.get("albedo_map_interp", "nearest")),
+                    ocean_glint_model=str(cfg.earth.get("ocean_glint_model", "simple")),
                     ocean_glint_strength=float(cfg.earth.get("ocean_glint_strength", 0.0)),
                     ocean_glint_sigma_deg=float(cfg.earth.get("ocean_glint_sigma_deg", 6.0)),
                     ocean_glint_threshold=float(cfg.earth.get("ocean_glint_threshold", 0.12)),
+                    ocean_wind_m_s=float(cfg.earth.get("ocean_wind_m_s", 6.0)),
+                    ocean_refractive_index=float(cfg.earth.get("ocean_refractive_index", 1.334)),
+                    ocean_glint_max_albedo_increment=float(cfg.earth.get("ocean_glint_max_albedo_increment", 2.0)),
+                    earth_seasonal_ice=bool(cfg.earth.get("seasonal_ice_enable", True)),
+                    earth_ice_albedo=float(cfg.earth.get("ice_albedo", 0.65)),
+                    earth_ice_lat_north_base_deg=float(cfg.earth.get("ice_lat_north_base_deg", 72.0)),
+                    earth_ice_lat_north_amp_deg=float(cfg.earth.get("ice_lat_north_amp_deg", 8.0)),
+                    earth_ice_lat_south_base_deg=float(cfg.earth.get("ice_lat_south_base_deg", 68.0)),
+                    earth_ice_lat_south_amp_deg=float(cfg.earth.get("ice_lat_south_amp_deg", 5.0)),
+                    earth_ice_phase_north_doy=float(cfg.earth.get("ice_phase_north_doy", 20.0)),
+                    earth_ice_phase_south_doy=float(cfg.earth.get("ice_phase_south_doy", 200.0)),
                 ).astype(np.float64)
 
         total_if = sun_if + earth_if
@@ -1049,6 +1078,15 @@ def main(argv: list[str] | None = None) -> None:
         "DEMSCAL": (dem_scale if dem_path else 1.0, "DEM relief scl"),
         "DEMREFI": (dem_refine_iter if dem_path else 0, "DEM refine"),
         "ALBEARTH": (float(cfg.earth.get("albedo", 1.0)), "Earth alb scl"),
+        "ECLSMAP": (Path(str(earth_class_map_path)).name if earth_class_map_path else "", "Earth class map"),
+        "EGLMOD": (str(cfg.earth.get("ocean_glint_model", "simple"))[:16], "Earth glint model"),
+        "EGLSTR": (float(cfg.earth.get("ocean_glint_strength", 0.0)), "Earth glint str"),
+        "EGLWND": (float(cfg.earth.get("ocean_wind_m_s", 6.0)), "Earth wind m/s"),
+        "ECLDAMT": (float(cfg.earth.get("cloud_amount", 0.0)), "Earth cloud amt"),
+        "ECLDTAU": (float(cfg.earth.get("cloud_tau", 1.0)), "Earth cloud tau"),
+        "ECLDK": (float(cfg.earth.get("cloud_tau_k", 1.0)), "Earth cloud tau-k"),
+        "ESEAICE": (int(bool(cfg.earth.get("seasonal_ice_enable", True))), "Earth seasonal ice 0/1"),
+        "EICEALB": (float(cfg.earth.get("ice_albedo", 0.65)), "Earth ice alb"),
         "EDSAMP": (int(cfg.earth.get("earth_disk_samples", 192)), "E samp"),
         "EARTHPT": (earth_point_hdr, "Earth point 0/1"),
         "TILEPX": (int(cfg.earth.get("earthlight_tile_px", 16)), "Tile px"),

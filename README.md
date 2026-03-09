@@ -128,6 +128,50 @@ tools/go_single_image.sh \
   --out OUTPUT/synth_moon_single_from_cli.fits
 ```
 
+Synthetic Earth FITS (for Earthlight diagnostics):
+
+```bash
+uv run python tools/render_earth_fits.py \
+  --config scene.toml \
+  --utc 2006-02-17T06:18:45Z \
+  --nx 1024 --ny 1024 \
+  --out OUTPUT/earth_synth_20060217T061845Z.fits
+```
+
+This writes a float64 FITS cube with layers:
+`RAD_EAR, IF_EARTH, ECLASS, A_EFF, A_SURF, CLOUDF, MU0, MUV, FSUN, ELON, ELAT, MASK`.
+(`RAD_EAR` is layer 1.)
+
+Earth glint model switch in `scene.toml`:
+
+```toml
+[earth]
+ocean_glint_model = "cox_munk"  # "simple" | "cox_munk"
+ocean_wind_m_s = 6.0
+ocean_refractive_index = 1.334
+ocean_glint_strength = 0.15
+```
+
+Optional EO-style class map workflow (0=ocean, 1=land, 2=ice):
+
+```bash
+uv run python tools/make_earth_class_map_from_albedo.py \
+  --in-fits DATA/earth_albedo.fits \
+  --out-fits DATA/earth_class_map.fits
+```
+
+Then enable in `scene.toml`:
+
+```toml
+[earth]
+class_map_fits = "DATA/earth_class_map.fits"
+class_map_lon_mode = "0_360"
+class_map_interp = "nearest"
+class_ocean_values = [0]
+class_land_values = [1]
+class_ice_values = [2]
+```
+
 Regression check for earthlight layers (IF_EARTH/RAD_EAR non-zero at a known UTC):
 ```bash
 ./tools/regression_check_earthlight_nonzero.sh

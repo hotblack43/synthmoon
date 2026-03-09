@@ -182,3 +182,18 @@ def apply_simple_clouds(
     out = np.array(base_albedo, copy=True, dtype=np.float64)
     out[mask] = (1.0 - c)*out[mask] + c*float(cloud_albedo)
     return out
+
+
+def simple_cloud_fraction_field(lon_deg: np.ndarray, lat_deg: np.ndarray) -> np.ndarray:
+    """
+    Deterministic pseudo-cloud field in [0,1] over lon/lat.
+
+    This is a lightweight stand-in for real cloud products and is useful for
+    debugging cloud/surface blending mechanics without external data.
+    """
+    lon = np.deg2rad(np.asarray(lon_deg, dtype=np.float64))
+    lat = np.deg2rad(np.asarray(lat_deg, dtype=np.float64))
+
+    field = 0.5 * (1.0 + np.sin(2.7 * lon + 0.4) * np.cos(2.1 * lat - 0.2))
+    field = 0.65 * field + 0.35 * (0.5 * (1.0 + np.sin(5.3 * lon - 1.3) * np.sin(3.7 * lat + 0.6)))
+    return np.clip(field, 0.0, 1.0)

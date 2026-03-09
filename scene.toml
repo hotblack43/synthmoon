@@ -92,15 +92,41 @@ earthlight_tile_px = 16
 # Optional Earth albedo map FITS (equirectangular). If omitted, a toy land/ocean + clouds model may be used.
 albedo_map_fits = "DATA/earth_albedo.fits"
 albedo_map_lon_mode = "0_360"
+
+# Optional Earth surface class map FITS (equirectangular):
+# class IDs are user-defined, e.g. 0=ocean, 1=land, 2=ice.
+# class_map_fits = "DATA/earth_class_map.fits"
+class_map_lon_mode = "0_360"
+class_map_interp = "nearest"
+class_ocean_values = [0]
+class_land_values = [1]
+class_ice_values = [2]
+
 land_albedo = 0.25
 ocean_albedo = 0.06
 cloud_amount = 0.0     # 0..1
 cloud_albedo = 0.6 # 0.6
+cloud_tau = 1.0        # effective cloud optical thickness
+cloud_tau_k = 1.0      # transmission shaping: 1-exp(-k*tau)
+
+# Optional simple seasonal polar caps (latitude threshold varies by day-of-year)
+seasonal_ice_enable = true
+ice_albedo = 0.65
+ice_lat_north_base_deg = 72.0
+ice_lat_north_amp_deg = 8.0
+ice_lat_south_base_deg = 68.0
+ice_lat_south_amp_deg = 5.0
+ice_phase_north_doy = 20.0
+ice_phase_south_doy = 200.0
 
 # optional: ocean sunglint (simple, fast)
+ocean_glint_model = "cox_munk"   # "simple" | "cox_munk"
 ocean_glint_strength = 0.15
 ocean_glint_sigma_deg = 6.0
 ocean_glint_threshold = 0.12
+ocean_wind_m_s = 6.0
+ocean_refractive_index = 1.334
+ocean_glint_max_albedo_increment = 2.0
 
 [sun]
 # Extended solar disk (finite angular size) matters near the terminator/horizon.
