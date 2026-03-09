@@ -178,6 +178,33 @@ Important:
 - it is not the recommended default for the EO workflow described below
 - for the EO workflow, leave `class_map_fits = ""` unless you have built a proper EO-derived class map
 
+EO-derived class map from MODIS land cover:
+
+```bash
+uv run python tools/make_earth_class_map_from_modis_landcover.py \
+  --in-hdf 'DATA/MODIS/MCD12C1*.hdf' \
+  --out-fits DATA/MODIS/earth_class_map_modis_2011.fits
+```
+
+This maps MODIS LC_Type1 classes as:
+- water (`0`) -> ocean class
+- permanent snow/ice (`15`) -> ice class
+- everything else -> land class
+
+Then enable it explicitly:
+
+```toml
+[earth]
+class_map_fits = "DATA/MODIS/earth_class_map_modis_2011.fits"
+class_map_lon_mode = "-180_180"
+class_map_interp = "nearest"
+class_ocean_values = [0]
+class_land_values = [1]
+class_ice_values = [2]
+```
+
+Use this only if you want class-driven land/ocean/ice behavior. The recommended EO default still works without any class map.
+
 Earthdata token setup for EO downloads:
 
 ```bash
