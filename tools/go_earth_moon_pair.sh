@@ -18,13 +18,16 @@ Options:
   --out-dir DIR       Output directory (default: OUTPUT)
   --earth-out PATH    Explicit Earth output FITS path
   --moon-out PATH     Explicit Moon output FITS path
+  --fetch-missing     Automatically download/extract missing EO products
   -h, --help          Show this help
 
 Behavior:
   - Uses the EO Earth workflow:
     MODIS daily clouds + NSIDC daily sea ice + MODIS static land ice.
-  - If any required EO file is missing, the script stops and prints the
-    exact uv-run commands needed to fetch/extract it.
+  - If any required EO file is missing, the script either:
+    * stops and prints the exact uv-run commands needed, or
+    * if --fetch-missing is given, downloads/extracts the missing products
+      and then continues.
 EOF
 }
 
@@ -37,6 +40,7 @@ JD=""
 LON=""
 LAT=""
 ALT_M=""
+FETCH_MISSING=0
 
 while (($#)); do
   case "$1" in
@@ -44,6 +48,7 @@ while (($#)); do
     --out-dir) OUT_DIR="${2:?}"; shift 2 ;;
     --earth-out) EARTH_OUT="${2:?}"; shift 2 ;;
     --moon-out) MOON_OUT="${2:?}"; shift 2 ;;
+    --fetch-missing) FETCH_MISSING=1; shift ;;
     --utc) UTC="${2:?}"; shift 2 ;;
     --jd) JD="${2:?}"; shift 2 ;;
     --lon) LON="${2:?}"; shift 2 ;;
@@ -131,6 +136,45 @@ if [[ ! -f "$LAND_ICE" ]]; then
 fi
 
 if ((MISSING)); then
+  if ((FETCH_MISSING)); then
+    if [[ -z "$MODIS_CF" || -z "$MODIS_TAU" ]]; then
+      echo "Fetching MODIS daily clouds for ${UTC_CANON}"
+      UV_CACHE_DIR=/tmp/uvcache uv run python tools/download_modis_cloud_granule.py \
+        --utc "${UTC_CANON}" \
+        --product MOD08_D3 \
+        --out-dir DATA/MODIS
+      UV_CACHE_DIR=/tmp/uvcache uv run python tools/extract_modis_l3_cloud_maps.py \
+        --in-hdf "DATA/MODIS/MOD08_D3.A${YEAR}${DOY}*.hdf" \
+        --out-dir DATA/MODIS
+      MODIS_CF="$(first_glob "$MODIS_CF_GLOB")"
+      MODIS_TAU="$(first_glob "$MODIS_TAU_GLOB")"
+    fi
+    if [[ ! -f "$NSIDC_ICE" ]]; then
+      echo "Fetching NSIDC daily sea ice for ${UTC_CANON}"
+      UV_CACHE_DIR=/tmp/uvcache uv run python tools/download_nsidc_g02202_daily.py \
+        --utc "${UTC_CANON}" \
+        --hemisphere both \
+        --out-dir DATA/NSIDC
+      UV_CACHE_DIR=/tmp/uvcache uv run python tools/extract_nsidc_g02202_ice_map.py \
+        --north-nc "DATA/NSIDC/sic_psn25_${DATE8}_*.nc" \
+        --south-nc "DATA/NSIDC/sic_pss25_${DATE8}_*.nc" \
+        --out-fits "${NSIDC_ICE}"
+    fi
+    if [[ ! -f "$LAND_ICE" ]]; then
+      echo "Fetching MODIS static land ice for year ${YEAR}"
+      UV_CACHE_DIR=/tmp/uvcache uv run python tools/download_modis_landcover_file.py \
+        --year "${YEAR}" \
+        --product MCD12C1 \
+        --out-dir DATA/MODIS
+      UV_CACHE_DIR=/tmp/uvcache uv run python tools/extract_modis_landice_mask.py \
+        --in-hdf "DATA/MODIS/MCD12C1.A${YEAR}001*.hdf" \
+        --out-fits "${LAND_ICE}"
+    fi
+    if [[ -z "$MODIS_CF" || -z "$MODIS_TAU" || ! -f "$NSIDC_ICE" || ! -f "$LAND_ICE" ]]; then
+      echo "Error: automatic EO fetch did not produce all required files." >&2
+      exit 4
+    fi
+  else
   echo "Required EO input files are missing for UTC ${UTC_CANON}." >&2
   echo >&2
   echo "Run these commands, then rerun this script:" >&2
@@ -173,6 +217,7 @@ if ((MISSING)); then
     echo >&2
   fi
   exit 3
+  fi
 fi
 
 STAMP="${UTC_CANON//:/}"
