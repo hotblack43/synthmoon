@@ -354,6 +354,10 @@ def earthlight_if_tilecached(
     ny: int,
     earth_map: EquirectMap | None = None,
     earth_class_map: EquirectMap | None = None,
+    earth_cloud_fraction_map: EquirectMap | None = None,
+    earth_cloud_tau_map: EquirectMap | None = None,
+    earth_ice_fraction_map: EquirectMap | None = None,
+    earth_land_ice_mask_map: EquirectMap | None = None,
     earth_class_interp: str = "nearest",
     earth_class_ocean_values: list[float] | tuple[float, ...] = (0.0,),
     earth_class_land_values: list[float] | tuple[float, ...] = (1.0,),
@@ -365,6 +369,13 @@ def earthlight_if_tilecached(
     earth_cloud_tau: float = 1.0,
     earth_cloud_tau_k: float = 1.0,
     earth_map_interp: str = "nearest",
+    earth_cloud_map_interp: str = "nearest",
+    earth_ice_map_interp: str = "nearest",
+    earth_ice_fraction_threshold: float = 0.15,
+    earth_ice_fraction_blend: bool = True,
+    earth_land_ice_interp: str = "nearest",
+    earth_land_ice_threshold: float = 0.5,
+    earth_land_ice_blend: bool = False,
     ocean_glint_model: str = "simple",
     ocean_glint_strength: float = 0.0,
     ocean_glint_sigma_deg: float = 6.0,
@@ -452,6 +463,7 @@ def earthlight_if_tilecached(
         # Surface classes from optional class map (EO-style): ocean/land/ice IDs.
         cls = None
         ocean_cls = None
+        land_cls = None
         ice_cls = None
         if earth_class_map is not None:
             cls = earth_class_map.sample_interp(lon, lat, interp=str(earth_class_interp))
@@ -477,6 +489,48 @@ def earthlight_if_tilecached(
                 A_surface = earth_map.sample_interp(lon, lat, interp=str(earth_map_interp))
             else:
                 A_surface = toy_land_ocean_albedo(lon, lat, ocean=earth_ocean_albedo, land=earth_land_albedo)
+
+        # Optional EO ice-fraction map overrides ocean pixels with ice albedo.
+        if earth_ice_fraction_map is not None:
+            ice_frac = np.asarray(
+                earth_ice_fraction_map.sample_interp(lon, lat, interp=str(earth_ice_map_interp)),
+                dtype=np.float64,
+            )
+            ice_frac = np.clip(ice_frac, 0.0, 1.0)
+            if ocean_cls is not None:
+                ocean_for_ice = ocean_cls.copy()
+            else:
+                ocean_for_ice = A_surface <= max(float(earth_ocean_albedo), float(ocean_glint_threshold))
+            if bool(earth_ice_fraction_blend):
+                w_ice = np.where(ocean_for_ice, ice_frac, 0.0)
+                A_surface = (1.0 - w_ice) * A_surface + w_ice * float(earth_ice_albedo)
+            else:
+                ice_mask = ocean_for_ice & (ice_frac >= float(earth_ice_fraction_threshold))
+                if np.any(ice_mask):
+                    A_surface = np.array(A_surface, copy=True, dtype=np.float64)
+                    A_surface[ice_mask] = float(earth_ice_albedo)
+
+        # Optional static land-ice mask overrides land pixels with ice albedo.
+        if earth_land_ice_mask_map is not None:
+            land_ice = np.asarray(
+                earth_land_ice_mask_map.sample_interp(lon, lat, interp=str(earth_land_ice_interp)),
+                dtype=np.float64,
+            )
+            land_ice = np.clip(land_ice, 0.0, 1.0)
+            if cls is not None:
+                land_for_ice = land_cls | ice_cls
+            elif ocean_cls is not None:
+                land_for_ice = ~ocean_cls
+            else:
+                land_for_ice = A_surface > max(float(earth_ocean_albedo), float(ocean_glint_threshold))
+            if bool(earth_land_ice_blend):
+                w_land_ice = np.where(land_for_ice, land_ice, 0.0)
+                A_surface = (1.0 - w_land_ice) * A_surface + w_land_ice * float(earth_ice_albedo)
+            else:
+                land_ice_mask = land_for_ice & (land_ice >= float(earth_land_ice_threshold))
+                if np.any(land_ice_mask):
+                    A_surface = np.array(A_surface, copy=True, dtype=np.float64)
+                    A_surface[land_ice_mask] = float(earth_ice_albedo)
 
         omega_hit = omega[hitE]
 
@@ -536,10 +590,26 @@ def earthlight_if_tilecached(
         # with fc_local = cloud_field * cloud_amount * (1-exp(-k*tau)).
         cloud_amt = float(np.clip(earth_cloud_amount, 0.0, 1.0))
         if cloud_amt > 0.0:
-            tau = float(max(earth_cloud_tau, 0.0))
             tau_k = float(max(earth_cloud_tau_k, 0.0))
-            trans = 1.0 - np.exp(-tau_k * tau)
-            cloud_field = simple_cloud_fraction_field(lon, lat)
+            if earth_cloud_fraction_map is not None:
+                cloud_field = np.asarray(
+                    earth_cloud_fraction_map.sample_interp(lon, lat, interp=str(earth_cloud_map_interp)),
+                    dtype=np.float64,
+                )
+                cloud_field = np.clip(cloud_field, 0.0, 1.0)
+            else:
+                cloud_field = simple_cloud_fraction_field(lon, lat)
+
+            if earth_cloud_tau_map is not None:
+                tau_local = np.asarray(
+                    earth_cloud_tau_map.sample_interp(lon, lat, interp=str(earth_cloud_map_interp)),
+                    dtype=np.float64,
+                )
+                tau_local = np.maximum(tau_local, 0.0)
+            else:
+                tau_local = np.full(lon.shape, float(max(earth_cloud_tau, 0.0)), dtype=np.float64)
+
+            trans = 1.0 - np.exp(-tau_k * tau_local)
             fc_local = np.clip(cloud_amt * trans * cloud_field, 0.0, 1.0)
             A_E = (1.0 - fc_local) * A_surface + fc_local * float(earth_cloud_albedo)
         else:

@@ -724,6 +724,46 @@ def main(argv: list[str] | None = None) -> None:
             fill=float(cfg.earth.get("class_map_fill", -999.0)),
         )
 
+    earth_cloud_fraction_map = None
+    earth_cloud_fraction_map_path = cfg.earth.get("cloud_fraction_map_fits", None)
+    if earth_cloud_fraction_map_path:
+        earth_cloud_lon_mode = str(cfg.earth.get("cloud_map_lon_mode", str(cfg.earth.get("albedo_map_lon_mode", "0_360"))))
+        earth_cloud_fraction_map = EquirectMap.load_fits(
+            earth_cloud_fraction_map_path,
+            lon_mode=earth_cloud_lon_mode,
+            fill=float(cfg.earth.get("cloud_fraction_map_fill", 0.0)),
+        )
+
+    earth_cloud_tau_map = None
+    earth_cloud_tau_map_path = cfg.earth.get("cloud_tau_map_fits", None)
+    if earth_cloud_tau_map_path:
+        earth_cloud_lon_mode = str(cfg.earth.get("cloud_map_lon_mode", str(cfg.earth.get("albedo_map_lon_mode", "0_360"))))
+        earth_cloud_tau_map = EquirectMap.load_fits(
+            earth_cloud_tau_map_path,
+            lon_mode=earth_cloud_lon_mode,
+            fill=float(cfg.earth.get("cloud_tau_map_fill", 0.0)),
+        )
+
+    earth_ice_fraction_map = None
+    earth_ice_fraction_map_path = cfg.earth.get("ice_fraction_map_fits", None)
+    if earth_ice_fraction_map_path:
+        earth_ice_lon_mode = str(cfg.earth.get("ice_map_lon_mode", str(cfg.earth.get("albedo_map_lon_mode", "0_360"))))
+        earth_ice_fraction_map = EquirectMap.load_fits(
+            earth_ice_fraction_map_path,
+            lon_mode=earth_ice_lon_mode,
+            fill=float(cfg.earth.get("ice_fraction_map_fill", 0.0)),
+        )
+
+    earth_land_ice_mask_map = None
+    earth_land_ice_mask_path = cfg.earth.get("land_ice_mask_fits", None)
+    if earth_land_ice_mask_path:
+        earth_land_ice_lon_mode = str(cfg.earth.get("land_ice_mask_lon_mode", str(cfg.earth.get("albedo_map_lon_mode", "0_360"))))
+        earth_land_ice_mask_map = EquirectMap.load_fits(
+            earth_land_ice_mask_path,
+            lon_mode=earth_land_ice_lon_mode,
+            fill=float(cfg.earth.get("land_ice_mask_fill", 0.0)),
+        )
+
     # Optional lunar DEM (absolute radius) for orography
     moon_dem = None
     dem_path = cfg.moon.get("dem_fits", None)
@@ -943,6 +983,10 @@ def main(argv: list[str] | None = None) -> None:
                     ny=ny,
                     earth_map=earth_map,
                     earth_class_map=earth_class_map,
+                    earth_cloud_fraction_map=earth_cloud_fraction_map,
+                    earth_cloud_tau_map=earth_cloud_tau_map,
+                    earth_ice_fraction_map=earth_ice_fraction_map,
+                    earth_land_ice_mask_map=earth_land_ice_mask_map,
                     earth_class_interp=str(cfg.earth.get("class_map_interp", "nearest")),
                     earth_class_ocean_values=tuple(float(v) for v in cfg.earth.get("class_ocean_values", [0])),
                     earth_class_land_values=tuple(float(v) for v in cfg.earth.get("class_land_values", [1])),
@@ -954,6 +998,13 @@ def main(argv: list[str] | None = None) -> None:
                     earth_cloud_tau=float(cfg.earth.get("cloud_tau", 1.0)),
                     earth_cloud_tau_k=float(cfg.earth.get("cloud_tau_k", 1.0)),
                     earth_map_interp=str(cfg.earth.get("albedo_map_interp", "nearest")),
+                    earth_cloud_map_interp=str(cfg.earth.get("cloud_map_interp", "nearest")),
+                    earth_ice_map_interp=str(cfg.earth.get("ice_map_interp", "nearest")),
+                    earth_ice_fraction_threshold=float(cfg.earth.get("ice_fraction_threshold", 0.15)),
+                    earth_ice_fraction_blend=bool(cfg.earth.get("ice_fraction_blend", True)),
+                    earth_land_ice_interp=str(cfg.earth.get("land_ice_mask_interp", "nearest")),
+                    earth_land_ice_threshold=float(cfg.earth.get("land_ice_mask_threshold", 0.5)),
+                    earth_land_ice_blend=bool(cfg.earth.get("land_ice_mask_blend", False)),
                     ocean_glint_model=str(cfg.earth.get("ocean_glint_model", "simple")),
                     ocean_glint_strength=float(cfg.earth.get("ocean_glint_strength", 0.0)),
                     ocean_glint_sigma_deg=float(cfg.earth.get("ocean_glint_sigma_deg", 6.0)),
@@ -1079,6 +1130,10 @@ def main(argv: list[str] | None = None) -> None:
         "DEMREFI": (dem_refine_iter if dem_path else 0, "DEM refine"),
         "ALBEARTH": (float(cfg.earth.get("albedo", 1.0)), "Earth alb scl"),
         "ECLSMAP": (Path(str(earth_class_map_path)).name if earth_class_map_path else "", "Earth class map"),
+        "ECLDMAP": (Path(str(earth_cloud_fraction_map_path)).name if earth_cloud_fraction_map_path else "", "Earth cloud frac map"),
+        "ECLDTMAP": (Path(str(earth_cloud_tau_map_path)).name if earth_cloud_tau_map_path else "", "Earth cloud tau map"),
+        "EICEMAP": (Path(str(earth_ice_fraction_map_path)).name if earth_ice_fraction_map_path else "", "Earth ice frac map"),
+        "ELIMAP": (Path(str(earth_land_ice_mask_path)).name if earth_land_ice_mask_path else "", "Earth land ice map"),
         "EGLMOD": (str(cfg.earth.get("ocean_glint_model", "simple"))[:16], "Earth glint model"),
         "EGLSTR": (float(cfg.earth.get("ocean_glint_strength", 0.0)), "Earth glint str"),
         "EGLWND": (float(cfg.earth.get("ocean_wind_m_s", 6.0)), "Earth wind m/s"),

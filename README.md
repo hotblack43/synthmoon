@@ -28,7 +28,7 @@ pip install -e .
 ### 2) Download SPICE generic kernels
 
 ```bash
-python scripts/download_kernels.py
+uv run python scripts/download_kernels.py
 ```
 
 This downloads:
@@ -59,7 +59,7 @@ limb_offset_scale = 1.0       # 1.0 = limb
 ```bash
 synthmoon-render --config scene.toml
 # or:
-python -m synthmoon.run_v0 --config scene.toml
+uv run python -m synthmoon.run_v0 --config scene.toml
 ```
 
 Output FITS is written to `OUTPUT/` by default.
@@ -152,7 +152,7 @@ ocean_refractive_index = 1.334
 ocean_glint_strength = 0.15
 ```
 
-Optional EO-style class map workflow (0=ocean, 1=land, 2=ice):
+Optional Earth surface-class workflow (0=ocean, 1=land, 2=ice):
 
 ```bash
 uv run python tools/make_earth_class_map_from_albedo.py \
@@ -171,6 +171,170 @@ class_ocean_values = [0]
 class_land_values = [1]
 class_ice_values = [2]
 ```
+
+Important:
+- this helper currently builds a simple class map from the existing albedo map
+- it is useful for testing class-driven logic
+- it is not the recommended default for the EO workflow described below
+- for the EO workflow, leave `class_map_fits = ""` unless you have built a proper EO-derived class map
+
+Earthdata token setup for EO downloads:
+
+```bash
+export EARTHDATA_TOKEN='your_very_long_token_here'
+echo ${#EARTHDATA_TOKEN}
+```
+
+Add that `export` line to `~/.bashrc` if you want it available in future shells.
+
+MODIS daily global cloud maps (recommended over single `MOD06_L2` swaths):
+
+```bash
+uv run python tools/download_modis_cloud_granule.py \
+  --utc 2011-07-06T06:21:47Z \
+  --product MOD08_D3 \
+  --out-dir DATA/MODIS
+```
+
+Then extract cloud maps from the downloaded daily HDF:
+
+```bash
+uv run python tools/extract_modis_l3_cloud_maps.py \
+  --in-hdf 'DATA/MODIS/MOD08_D3*.hdf' \
+  --out-dir DATA/MODIS
+```
+
+This is a separate two-step workflow:
+- step 1 downloads the MODIS daily HDF from Earthdata
+- step 2 extracts lon/lat FITS maps from that HDF
+
+Point `scene.toml` at the extracted daily cloud maps:
+
+```toml
+[earth]
+cloud_fraction_map_fits = "DATA/MODIS/<daily_prefix>_cloud_fraction.fits"
+cloud_tau_map_fits = "DATA/MODIS/<daily_prefix>_cloud_tau.fits"
+cloud_map_lon_mode = "-180_180"
+cloud_map_interp = "nearest"
+```
+
+This daily Level-3 path avoids the narrow-strip problem of a single `MOD06_L2` swath.
+
+NSIDC daily sea-ice maps (sea ice only; not Greenland/Antarctic land ice):
+
+```bash
+uv run python tools/download_nsidc_g02202_daily.py \
+  --utc 2011-07-06T06:21:47Z \
+  --hemisphere both \
+  --out-dir DATA/NSIDC
+```
+
+Then convert the two polar daily files into one global lon/lat FITS ice-fraction map:
+
+```bash
+uv run python tools/extract_nsidc_g02202_ice_map.py \
+  --north-nc DATA/NSIDC/sic_psn25_20110706_F17_v05r00.nc \
+  --south-nc DATA/NSIDC/sic_pss25_20110706_F17_v05r00.nc \
+  --out-fits DATA/NSIDC/ice_fraction_20110706.fits
+```
+
+This is also a separate two-step workflow:
+- step 1 downloads the north and south NSIDC daily files
+- step 2 reprojects them into one equirectangular FITS map
+
+Enable that sea-ice map in `scene.toml`:
+
+```toml
+[earth]
+ice_fraction_map_fits = "DATA/NSIDC/ice_fraction_20110706.fits"
+ice_map_lon_mode = "-180_180"
+ice_map_interp = "nearest"
+ice_fraction_threshold = 0.15
+ice_fraction_blend = true
+
+# keep fake caps off when using real sea ice:
+class_ice_values = []
+seasonal_ice_enable = false
+```
+
+Important:
+- `MOD08_D3` gives daily global cloud fields
+- `G02202_V5` gives daily sea-ice concentration over ocean
+- neither product gives permanent land ice on Greenland or Antarctica
+
+Static land ice for Greenland and Antarctica:
+
+Use an annual MODIS land-cover product with a permanent snow/ice class. The easy global first choice is `MCD12C1`.
+
+Download the annual land-cover file:
+
+```bash
+uv run python tools/download_modis_landcover_file.py \
+  --year 2011 \
+  --product MCD12C1 \
+  --out-dir DATA/MODIS
+```
+
+Then extract a global land-ice mask FITS from the MODIS land-cover HDF:
+
+```bash
+uv run python tools/extract_modis_landice_mask.py \
+  --in-hdf 'DATA/MODIS/MCD12C1*.hdf' \
+  --out-fits DATA/MODIS/land_ice_mask_2011.fits
+```
+
+This is again a separate two-step workflow:
+- step 1 downloads the annual MODIS land-cover HDF
+- step 2 extracts a global 0..1 FITS mask for permanent land ice
+
+Enable that static land-ice mask in `scene.toml`:
+
+```toml
+[earth]
+land_ice_mask_fits = "DATA/MODIS/land_ice_mask_2011.fits"
+land_ice_mask_lon_mode = "-180_180"
+land_ice_mask_interp = "nearest"
+land_ice_mask_threshold = 0.5
+land_ice_mask_blend = true
+
+# keep fake caps off when using real products:
+class_ice_values = []
+seasonal_ice_enable = false
+```
+
+The extractor assumes the standard IGBP permanent snow/ice class value (`15`) from the MODIS LC_Type1 classification. You can override that on the command line if needed.
+
+A practical split is:
+- use `MCD12C1` for static land ice
+- use `G02202_V5` for daily sea ice
+- use `MOD08_D3` for daily clouds
+
+Current recommended EO-Earth default:
+
+```toml
+[earth]
+albedo_map_fits = "DATA/earth_albedo.fits"
+class_map_fits = ""
+
+cloud_fraction_map_fits = "DATA/MODIS/<daily_prefix>_cloud_fraction.fits"
+cloud_tau_map_fits = "DATA/MODIS/<daily_prefix>_cloud_tau.fits"
+cloud_map_lon_mode = "-180_180"
+
+ice_fraction_map_fits = "DATA/NSIDC/ice_fraction_YYYYMMDD.fits"
+ice_map_lon_mode = "-180_180"
+ice_fraction_blend = true
+
+land_ice_mask_fits = "DATA/MODIS/land_ice_mask_YYYY.fits"
+land_ice_mask_lon_mode = "-180_180"
+land_ice_mask_blend = true
+
+seasonal_ice_enable = false
+class_ice_values = []
+```
+
+This keeps Earth land-surface classification possible, but separate from the old toy class map:
+- if you want class-based land/ocean/ice logic later, provide a proper EO-derived class map and set `class_map_fits`
+- if you do not have that yet, the recommended path is albedo + clouds + daily sea ice + static land ice, with `class_map_fits = ""`
 
 Regression check for earthlight layers (IF_EARTH/RAD_EAR non-zero at a known UTC):
 ```bash

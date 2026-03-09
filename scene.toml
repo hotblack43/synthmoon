@@ -95,22 +95,43 @@ albedo_map_lon_mode = "0_360"
 
 # Optional Earth surface class map FITS (equirectangular):
 # class IDs are user-defined, e.g. 0=ocean, 1=land, 2=ice.
-# class_map_fits = "DATA/earth_class_map.fits"
+# Leave this disabled for the EO workflow unless you have built a proper EO-derived class map.
+class_map_fits = ""
 class_map_lon_mode = "0_360"
 class_map_interp = "nearest"
 class_ocean_values = [0]
 class_land_values = [1]
-class_ice_values = [2]
+class_ice_values = []
+
+# Optional daily sea-ice fraction map (0..1 on lon/lat grid). Prefer this over fake latitude caps.
+ice_fraction_map_fits = "DATA/NSIDC/ice_fraction_20110706.fits"
+ice_map_lon_mode = "-180_180"
+ice_map_interp = "nearest"
+ice_fraction_threshold = 0.15
+ice_fraction_blend = true
+
+# Optional static land-ice mask (0..1 on lon/lat grid), e.g. Greenland/Antarctica from MCD12C1.
+land_ice_mask_fits = "DATA/MODIS/land_ice_mask_2011.fits"
+land_ice_mask_lon_mode = "-180_180"
+land_ice_mask_interp = "nearest"
+land_ice_mask_threshold = 0.5
+land_ice_mask_blend = true
 
 land_albedo = 0.25
 ocean_albedo = 0.06
-cloud_amount = 0.0     # 0..1
+cloud_amount = 0.5     # 0..1
 cloud_albedo = 0.6 # 0.6
-cloud_tau = 1.0        # effective cloud optical thickness
+cloud_tau = 1.5        # effective cloud optical thickness
 cloud_tau_k = 1.0      # transmission shaping: 1-exp(-k*tau)
 
+# Optional cloud maps (equirectangular). If set, these replace synthetic cloud field.
+cloud_fraction_map_fits = "DATA/MODIS/mod08_d3.a2011187.061.2017325045937_cloud_fraction.fits"
+cloud_tau_map_fits = "DATA/MODIS/mod08_d3.a2011187.061.2017325045937_cloud_tau.fits"
+cloud_map_lon_mode = "-180_180"
+cloud_map_interp = "nearest"
+
 # Optional simple seasonal polar caps (latitude threshold varies by day-of-year)
-seasonal_ice_enable = true
+seasonal_ice_enable = false
 ice_albedo = 0.65
 ice_lat_north_base_deg = 72.0
 ice_lat_north_amp_deg = 8.0
