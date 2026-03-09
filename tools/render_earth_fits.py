@@ -132,7 +132,10 @@ def main() -> None:
         obs_pos = (obs_state_ec + earth_state_ssb)[:3]
 
     # Camera basis on the sky plane of the observer.
-    forward = earth_pos - obs_pos
+    # Visible hemisphere is centred on the Earth-center -> observer direction.
+    # Using the opposite sign would render the far side of Earth and invert the
+    # expected Earth/Moon phase complementarity.
+    forward = obs_pos - earth_pos
     # Earth north axis in J2000 to orient image up.
     r_e2j = np.array(sp.pxform("IAU_EARTH", "J2000", float(et)), dtype=float)
     earth_north_j2k = r_e2j @ np.array([0.0, 0.0, 1.0], dtype=float)
