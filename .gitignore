@@ -7,6 +7,10 @@ DATA/moon_albedo_*.fits
 *.hdf
 *.aux.xml
 *.tiff
+DATA/
+*.fits
+*.grd
+*.rds
 synthmoon_v0_patch*.zip
 OLD/
 
@@ -14,6 +18,8 @@ OLD/
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 *.egg-info/
 
 # DEM / big data
@@ -27,3 +33,7 @@ DATA/MODIS/*.hdf
 DATA/NSIDC/*.nc
 DATA/MODIS/*.aux.xml
 want.txt
+
+# local backup/edit residue
+*.bak
+*.bak*
