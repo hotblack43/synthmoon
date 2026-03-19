@@ -59,6 +59,15 @@ def auto_scale(rgb: np.ndarray, pct: float) -> float:
     return max(val, 1.0e-12)
 
 
+def layer_index_from_header(header: fits.Header, layer_name: str) -> int:
+    target = str(layer_name).strip().upper()
+    n_layers = int(header.get("NLAYERS", 0) or 0)
+    for i in range(1, n_layers + 1):
+        if str(header.get(f"LAY{i}", "")).strip().upper() == target:
+            return i - 1
+    raise KeyError(f"Layer {layer_name} not found in FITS header")
+
+
 def write_rgb_png(rgb: np.ndarray, out_path: Path, scale: float, pad_frac: float = 0.0) -> None:
     x = np.clip(np.asarray(rgb, dtype=np.float64) / float(scale), 0.0, 1.0)
     x = np.power(x, 1.0 / 2.2)
@@ -128,10 +137,15 @@ def main() -> None:
             env=env,
         )
 
-        cube = np.asarray(fits.getdata(fits_path), dtype=np.float64)
+        with fits.open(fits_path) as hdul:
+            cube = np.asarray(hdul[0].data, dtype=np.float64)
+            header = hdul[0].header
         if cube.ndim != 3 or cube.shape[0] < 5:
             raise RuntimeError(f"Unexpected Earth cube shape for {fits_path}: {cube.shape}")
-        rgb = np.stack([cube[2], cube[3], cube[4]], axis=-1)
+        idx_r = layer_index_from_header(header, "RAD_R")
+        idx_g = layer_index_from_header(header, "RAD_G")
+        idx_b = layer_index_from_header(header, "RAD_B")
+        rgb = np.stack([cube[idx_r], cube[idx_g], cube[idx_b]], axis=-1)
         if scale is None:
             scale = auto_scale(rgb, args.scale_pct)
             print(f"Earth RGB scaling: scale={scale:.6g} (p{args.scale_pct:g} of first frame)")

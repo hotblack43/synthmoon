@@ -82,6 +82,21 @@ def _parse_rgb_triplet(value: object, default: tuple[float, float, float]) -> tu
     return default
 
 
+def _physical_layer_sum_cards(layers: dict[str, tuple[np.ndarray, str]]) -> dict[str, tuple[float, str]]:
+    key_map = {
+        "RAD_R": "SUMRADR",
+        "RAD_G": "SUMRADG",
+        "RAD_B": "SUMRADB",
+    }
+    out: dict[str, tuple[float, str]] = {}
+    for layer_name, (arr, unit) in layers.items():
+        hdr_key = key_map.get(layer_name)
+        if hdr_key is None or "W m-2" not in str(unit):
+            continue
+        out[hdr_key] = (float(np.nansum(np.asarray(arr, dtype=np.float64))), f"Sum of {layer_name}")
+    return out
+
+
 def _default_modis_igbp_rgb_table() -> dict[int, tuple[float, float, float]]:
     # Coarse broadband reflectance anchors for visible RGB rendering.
     return {
@@ -745,6 +760,7 @@ def main() -> None:
         "ECLSMAP": (Path(str(earth_class_map_path)).name if earth_class_map_path else "", "Earth class map"),
         "CLRPRES": (str(cfg.earth.get("class_rgb_preset", ""))[:16], "Class RGB preset"),
     }
+    hdr.update(_physical_layer_sum_cards(layers))
 
     if args.only_layer_index is not None:
         idx = int(args.only_layer_index)
@@ -757,6 +773,8 @@ def main() -> None:
             h[k] = (v, c)
         h["LAYER"] = (name, "Selected layer name")
         h["BUNIT"] = (unit[:68], "Selected layer unit")
+        if "W m-2" in str(unit):
+            h["SUMPIX"] = (float(np.nansum(np.asarray(arr, dtype=np.float64))), f"Sum of {name}")
         fits.PrimaryHDU(data=np.asarray(arr, dtype=np.float64), header=h).writeto(out, overwrite=True, output_verify="silentfix")
         print(f"Wrote Earth image: {out}  (layer: {name})")
     else:

@@ -1,0 +1,164 @@
+% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.2 $
+% Do not modify the above lines!
+%
+% This is an auxiliary file used by the 'biblatex' package.
+% This file may safely be deleted. It will be recreated by
+% biber as required.
+%
+\begingroup
+\makeatletter
+\@ifundefined{ver@biblatex.sty}
+  {\@latex@error
+     {Missing 'biblatex' package}
+     {The bibliography requires the 'biblatex' package.}
+      \aftergroup\endinput}
+  {}
+\endgroup
+
+
+\refsection{0}
+  \datalist[entry]{nyt/global//global/global}
+    \entry{acton1996}{article}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=53779911b93ce158d23ccde8a93b9dd8}{%
+           family={Acton},
+           familyi={A\bibinitperiod},
+           given={Charles\bibnamedelima H.},
+           giveni={C\bibinitperiod\bibinitdelim H\bibinitperiod},
+           givenun=0}}%
+      }
+      \strng{namehash}{53779911b93ce158d23ccde8a93b9dd8}
+      \strng{fullhash}{53779911b93ce158d23ccde8a93b9dd8}
+      \strng{bibnamehash}{53779911b93ce158d23ccde8a93b9dd8}
+      \strng{authorbibnamehash}{53779911b93ce158d23ccde8a93b9dd8}
+      \strng{authornamehash}{53779911b93ce158d23ccde8a93b9dd8}
+      \strng{authorfullhash}{53779911b93ce158d23ccde8a93b9dd8}
+      \field{sortinit}{A}
+      \field{sortinithash}{2f401846e2029bad6b3ecc16d50031e2}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Planetary and Space Science}
+      \field{number}{1}
+      \field{title}{Ancillary Data Services of {NASA}'s Navigation and Ancillary Information Facility}
+      \field{volume}{44}
+      \field{year}{1996}
+      \field{pages}{65\bibrangedash 70}
+      \range{pages}{6}
+      \verb{doi}
+      \verb 10.1016/0032-0633(95)00107-7
+      \endverb
+    \endentry
+    \entry{bucholtz1995}{article}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=4c8d9574c6f1e5692346841c1ae17124}{%
+           family={Bucholtz},
+           familyi={B\bibinitperiod},
+           given={Anthony},
+           giveni={A\bibinitperiod},
+           givenun=0}}%
+      }
+      \strng{namehash}{4c8d9574c6f1e5692346841c1ae17124}
+      \strng{fullhash}{4c8d9574c6f1e5692346841c1ae17124}
+      \strng{bibnamehash}{4c8d9574c6f1e5692346841c1ae17124}
+      \strng{authorbibnamehash}{4c8d9574c6f1e5692346841c1ae17124}
+      \strng{authornamehash}{4c8d9574c6f1e5692346841c1ae17124}
+      \strng{authorfullhash}{4c8d9574c6f1e5692346841c1ae17124}
+      \field{sortinit}{B}
+      \field{sortinithash}{d7095fff47cda75ca2589920aae98399}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Applied Optics}
+      \field{number}{15}
+      \field{title}{Rayleigh-Scattering Calculations for the Terrestrial Atmosphere}
+      \field{volume}{34}
+      \field{year}{1995}
+      \field{pages}{2765\bibrangedash 2773}
+      \range{pages}{9}
+      \verb{doi}
+      \verb 10.1364/AO.34.002765
+      \endverb
+    \endentry
+    \entry{cox1954}{article}{}
+      \name{author}{2}{}{%
+        {{un=0,uniquepart=base,hash=61d56903f320a2cc11a87d4736958884}{%
+           family={Cox},
+           familyi={C\bibinitperiod},
+           given={Charles},
+           giveni={C\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=5c291965ed1e052e3321cb824ce78804}{%
+           family={Munk},
+           familyi={M\bibinitperiod},
+           given={Walter},
+           giveni={W\bibinitperiod},
+           givenun=0}}%
+      }
+      \strng{namehash}{8d0838165d4ff0dbc283638293586d3f}
+      \strng{fullhash}{8d0838165d4ff0dbc283638293586d3f}
+      \strng{bibnamehash}{8d0838165d4ff0dbc283638293586d3f}
+      \strng{authorbibnamehash}{8d0838165d4ff0dbc283638293586d3f}
+      \strng{authornamehash}{8d0838165d4ff0dbc283638293586d3f}
+      \strng{authorfullhash}{8d0838165d4ff0dbc283638293586d3f}
+      \field{sortinit}{C}
+      \field{sortinithash}{4d103a86280481745c9c897c925753c0}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Journal of Marine Research}
+      \field{number}{2}
+      \field{title}{Statistics of the Sea Surface Derived from Sun Glitter}
+      \field{volume}{13}
+      \field{year}{1954}
+      \field{pages}{198\bibrangedash 227}
+      \range{pages}{30}
+      \verb{doi}
+      \verb 10.1357/002224054288083
+      \endverb
+    \endentry
+    \entry{henyey1941}{article}{}
+      \name{author}{2}{}{%
+        {{un=0,uniquepart=base,hash=e0d25b3be7001b01659fc55e762b190c}{%
+           family={Henyey},
+           familyi={H\bibinitperiod},
+           given={Louis\bibnamedelima C.},
+           giveni={L\bibinitperiod\bibinitdelim C\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=60d8209141b1dee05bb3982f1d3abac0}{%
+           family={Greenstein},
+           familyi={G\bibinitperiod},
+           given={Jesse\bibnamedelima L.},
+           giveni={J\bibinitperiod\bibinitdelim L\bibinitperiod},
+           givenun=0}}%
+      }
+      \strng{namehash}{744495a066f8b426ceda9235dce68b01}
+      \strng{fullhash}{744495a066f8b426ceda9235dce68b01}
+      \strng{bibnamehash}{744495a066f8b426ceda9235dce68b01}
+      \strng{authorbibnamehash}{744495a066f8b426ceda9235dce68b01}
+      \strng{authornamehash}{744495a066f8b426ceda9235dce68b01}
+      \strng{authorfullhash}{744495a066f8b426ceda9235dce68b01}
+      \field{sortinit}{H}
+      \field{sortinithash}{23a3aa7c24e56cfa16945d55545109b5}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{The Astrophysical Journal}
+      \field{title}{Diffuse Radiation in the Galaxy}
+      \field{volume}{93}
+      \field{year}{1941}
+      \field{pages}{70\bibrangedash 83}
+      \range{pages}{14}
+      \verb{doi}
+      \verb 10.1086/144246
+      \endverb
+    \endentry
+  \enddatalist
+\endrefsection
+\endinput
+
