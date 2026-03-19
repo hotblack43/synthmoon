@@ -144,6 +144,77 @@ def _rgb_from_class_ids(
     return rgb, known
 
 
+def _rayleigh_phase(cos_theta: np.ndarray) -> np.ndarray:
+    c2 = np.clip(cos_theta, -1.0, 1.0) ** 2
+    return (3.0 / (16.0 * np.pi)) * (1.0 + c2)
+
+
+def _hg_phase(cos_theta: np.ndarray, g: float) -> np.ndarray:
+    gg = float(np.clip(g, -0.95, 0.95))
+    denom = np.maximum(1.0 + gg * gg - 2.0 * gg * np.clip(cos_theta, -1.0, 1.0), 1.0e-8)
+    return ((1.0 - gg * gg) / (4.0 * np.pi)) / np.power(denom, 1.5)
+
+
+def _apply_earth_atmosphere(
+    *,
+    earth_cfg: dict,
+    fsun: np.ndarray,
+    mu0: np.ndarray,
+    muv: np.ndarray,
+    s: np.ndarray,
+    vobs: np.ndarray,
+    rad_surface_rgb: np.ndarray,
+    if_surface_rgb: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if not bool(earth_cfg.get("atmosphere_enable", True)):
+        z = np.zeros_like(rad_surface_rgb, dtype=np.float64)
+        return rad_surface_rgb, if_surface_rgb, z, np.ones_like(rad_surface_rgb, dtype=np.float64), z
+
+    mu0e = np.maximum(mu0, float(earth_cfg.get("atmosphere_mu_floor", 0.03)))
+    muve = np.maximum(muv, float(earth_cfg.get("atmosphere_mu_floor", 0.03)))
+    sec_sun = 1.0 / mu0e
+    sec_view = 1.0 / muve
+
+    tau_ray = np.array(
+        _parse_rgb_triplet(earth_cfg.get("rayleigh_tau_rgb", [0.18, 0.10, 0.05]), (0.18, 0.10, 0.05)),
+        dtype=np.float64,
+    )
+    tau_aer = np.array(
+        _parse_rgb_triplet(earth_cfg.get("aerosol_tau_rgb", [0.04, 0.04, 0.035]), (0.04, 0.04, 0.035)),
+        dtype=np.float64,
+    )
+    tau_tot = tau_ray + tau_aer
+
+    trans_sun = np.exp(-sec_sun[:, None] * tau_tot[None, :])
+    trans_view = np.exp(-sec_view[:, None] * tau_tot[None, :])
+    trans_total = trans_sun * trans_view
+
+    cos_scatter = np.einsum("ij,ij->i", s, vobs)
+    ph_ray = _rayleigh_phase(cos_scatter)
+    ph_aer = _hg_phase(cos_scatter, float(earth_cfg.get("aerosol_g", 0.70)))
+
+    path_scale = 1.0 - np.exp(-(sec_sun[:, None] + sec_view[:, None]) * tau_tot[None, :])
+    limb_boost_pow = float(max(earth_cfg.get("atmosphere_limb_boost_power", 0.15), 0.0))
+    limb_boost = np.power(np.clip(1.0 / muve, 1.0, None), limb_boost_pow)[:, None]
+    twilight_mu = float(max(earth_cfg.get("atmosphere_twilight_mu", 0.12), 1.0e-4))
+    sunlit_weight = np.clip(mu0 / twilight_mu, 0.0, 1.0)[:, None]
+
+    ray_frac = tau_ray[None, :] / np.maximum(tau_tot[None, :], 1.0e-12)
+    aer_frac = tau_aer[None, :] / np.maximum(tau_tot[None, :], 1.0e-12)
+
+    phase_mix = ray_frac * ph_ray[:, None] + aer_frac * ph_aer[:, None]
+    sky_rgb = np.array(
+        _parse_rgb_triplet(earth_cfg.get("atmosphere_sky_rgb", [0.60, 0.72, 1.00]), (0.60, 0.72, 1.00)),
+        dtype=np.float64,
+    )
+    atm_strength = float(max(earth_cfg.get("atmosphere_strength", 1.0), 0.0))
+    path_rad_rgb = atm_strength * (fsun[:, None] / np.pi) * path_scale * phase_mix * sky_rgb[None, :] * limb_boost * sunlit_weight
+
+    rad_total_rgb = rad_surface_rgb * trans_total + path_rad_rgb
+    if_total_rgb = if_surface_rgb * trans_total + (path_rad_rgb * np.pi) / np.maximum(fsun[:, None], 1.0e-12)
+    return rad_total_rgb, if_total_rgb, path_rad_rgb, trans_total, trans_view
+
+
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Render synthetic Earth disk to FITS using synthmoon Earth model")
     ap.add_argument("--config", default="scene.toml", help="Path to scene.toml")
@@ -547,12 +618,26 @@ def main() -> None:
     tsi_1au = float(cfg.output.get("tsi_w_m2", 1361.0))
     fsun = tsi_1au * np.array([inv_solar_irradiance_scale(pv[i], sun_pos) for i in range(pv.shape[0])], dtype=np.float64)
 
-    # Lambert Earth radiance proxy toward observer:
-    # L = (A_eff/pi) * F_sun * mu0
-    rad = (a_eff / np.pi) * fsun * mu0
-    rad_rgb = (a_eff_rgb / np.pi) * fsun[:, None] * mu0[:, None]
-    if_earth = a_eff * mu0
-    if_earth_rgb = a_eff_rgb * mu0[:, None]
+    # Lambert Earth radiance proxy toward observer before atmospheric effects.
+    rad_surface = (a_eff / np.pi) * fsun * mu0
+    rad_surface_rgb = (a_eff_rgb / np.pi) * fsun[:, None] * mu0[:, None]
+    if_surface = a_eff * mu0
+    if_surface_rgb = a_eff_rgb * mu0[:, None]
+
+    rad_rgb, if_earth_rgb, path_rad_rgb, atm_trans_rgb, atm_view_trans_rgb = _apply_earth_atmosphere(
+        earth_cfg=cfg.earth,
+        fsun=fsun,
+        mu0=mu0,
+        muv=muv,
+        s=s,
+        vobs=vobs,
+        rad_surface_rgb=rad_surface_rgb,
+        if_surface_rgb=if_surface_rgb,
+    )
+    rad = 0.2126 * rad_rgb[:, 0] + 0.7152 * rad_rgb[:, 1] + 0.0722 * rad_rgb[:, 2]
+    if_earth = 0.2126 * if_earth_rgb[:, 0] + 0.7152 * if_earth_rgb[:, 1] + 0.0722 * if_earth_rgb[:, 2]
+    path_rad = 0.2126 * path_rad_rgb[:, 0] + 0.7152 * path_rad_rgb[:, 1] + 0.0722 * path_rad_rgb[:, 2]
+    atm_trans = 0.2126 * atm_trans_rgb[:, 0] + 0.7152 * atm_trans_rgb[:, 1] + 0.0722 * atm_trans_rgb[:, 2]
 
     # Assemble output layers.
     z2 = np.zeros((ny, nx), dtype=np.float64)
@@ -569,6 +654,16 @@ def main() -> None:
     layer_ae = z2.copy(); layer_ae[mask] = a_eff
     layer_if = z2.copy(); layer_if[mask] = if_earth
     layer_rad = z2.copy(); layer_rad[mask] = rad
+    layer_rad_surf = z2.copy(); layer_rad_surf[mask] = rad_surface
+    layer_if_surf = z2.copy(); layer_if_surf[mask] = if_surface
+    layer_atm = z2.copy(); layer_atm[mask] = path_rad
+    layer_atm_r = z2.copy(); layer_atm_r[mask] = path_rad_rgb[:, 0]
+    layer_atm_g = z2.copy(); layer_atm_g[mask] = path_rad_rgb[:, 1]
+    layer_atm_b = z2.copy(); layer_atm_b[mask] = path_rad_rgb[:, 2]
+    layer_atmt = z2.copy(); layer_atmt[mask] = atm_trans
+    layer_atmt_r = z2.copy(); layer_atmt_r[mask] = atm_trans_rgb[:, 0]
+    layer_atmt_g = z2.copy(); layer_atmt_g[mask] = atm_trans_rgb[:, 1]
+    layer_atmt_b = z2.copy(); layer_atmt_b[mask] = atm_trans_rgb[:, 2]
     layer_as_r = z2.copy(); layer_as_r[mask] = a_surface_rgb[:, 0]
     layer_as_g = z2.copy(); layer_as_g[mask] = a_surface_rgb[:, 1]
     layer_as_b = z2.copy(); layer_as_b[mask] = a_surface_rgb[:, 2]
@@ -585,12 +680,22 @@ def main() -> None:
     layers = {
         "RAD_EAR": (layer_rad, "W m-2 sr-1"),
         "IF_EARTH": (layer_if, "I/F proxy"),
+        "RAD_SURF": (layer_rad_surf, "W m-2 sr-1"),
+        "IF_SURF": (layer_if_surf, "I/F proxy"),
+        "RAD_ATM": (layer_atm, "W m-2 sr-1"),
         "RAD_R": (layer_rad_r, "W m-2 sr-1"),
         "RAD_G": (layer_rad_g, "W m-2 sr-1"),
         "RAD_B": (layer_rad_b, "W m-2 sr-1"),
+        "ATM_R": (layer_atm_r, "W m-2 sr-1"),
+        "ATM_G": (layer_atm_g, "W m-2 sr-1"),
+        "ATM_B": (layer_atm_b, "W m-2 sr-1"),
         "IF_R": (layer_if_r, "I/F proxy"),
         "IF_G": (layer_if_g, "I/F proxy"),
         "IF_B": (layer_if_b, "I/F proxy"),
+        "ATMTOT": (layer_atmt, "transmittance"),
+        "ATMT_R": (layer_atmt_r, "transmittance"),
+        "ATMT_G": (layer_atmt_g, "transmittance"),
+        "ATMT_B": (layer_atmt_b, "transmittance"),
         "A_EFF": (layer_ae, "albedo"),
         "AEFF_R": (layer_ae_r, "albedo"),
         "AEFF_G": (layer_ae_g, "albedo"),

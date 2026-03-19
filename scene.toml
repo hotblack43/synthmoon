@@ -152,6 +152,18 @@ ocean_wind_m_s = 6.0
 ocean_refractive_index = 1.334
 ocean_glint_max_albedo_increment = 2.0
 
+# Optional first-order atmosphere on top of the surface model:
+# surface * transmission + single-scattered path radiance
+atmosphere_enable = true
+atmosphere_strength = 0.12
+atmosphere_mu_floor = 0.03
+atmosphere_limb_boost_power = 0.15
+atmosphere_twilight_mu = 0.12
+atmosphere_sky_rgb = [0.60, 0.72, 1.00]
+rayleigh_tau_rgb = [0.10, 0.06, 0.03]
+aerosol_tau_rgb = [0.02, 0.02, 0.018]
+aerosol_g = 0.70
+
 [sun]
 # Extended solar disk (finite angular size) matters near the terminator/horizon.
 extended_disk = true

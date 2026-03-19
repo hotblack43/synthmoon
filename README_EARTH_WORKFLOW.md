@@ -24,6 +24,13 @@ This writes a float64 FITS cube containing:
   - `ASRF_R`, `ASRF_G`, `ASRF_B`
 - `ECLASS` when a class map is active
 
+If the first-order atmosphere is enabled, the cube also contains:
+
+- `RAD_SURF`, `IF_SURF`
+- `RAD_ATM`
+- `ATM_R`, `ATM_G`, `ATM_B`
+- `ATMTOT`, `ATMT_R`, `ATMT_G`, `ATMT_B`
+
 `RAD_R/G/B` are the current color-capable Earth radiance layers and are the preferred basis for Earth quicklooks and Earth movies.
 
 ## Current Earth Inputs
@@ -44,6 +51,32 @@ class_rgb_preset = "modis_igbp"
 ```
 
 This is intended to make desert / vegetation / water / snow-ice distinctions visible in Earth images and later in colored Earthshine work.
+
+## First-Order Atmosphere
+
+The current Earth renderer now has a first-pass atmosphere model:
+
+- atmospheric transmission on the Sun and view paths
+- single-scattered Rayleigh path radiance
+- single-scattered aerosol path radiance using a Henyey-Greenstein phase function
+- RGB output so the limb can go bluish in a physically motivated way
+
+Current default knobs in `scene.toml` are:
+
+```toml
+[earth]
+atmosphere_enable = true
+atmosphere_strength = 0.12
+atmosphere_mu_floor = 0.03
+atmosphere_limb_boost_power = 0.15
+atmosphere_twilight_mu = 0.12
+atmosphere_sky_rgb = [0.60, 0.72, 1.00]
+rayleigh_tau_rgb = [0.10, 0.06, 0.03]
+aerosol_tau_rgb = [0.02, 0.02, 0.018]
+aerosol_g = 0.70
+```
+
+This is still a first-order approximation, not a full multiple-scattering atmosphere.
 
 ## Preferred Earth Movie Path
 
@@ -102,4 +135,3 @@ The current committed renderer contains defensive handling so Antarctic land ice
 - `OUTPUT/earth_synth_jd2453789p7630208_color.fits`
 - `OUTPUT/earth_synth_jd2453789p7630208_color.png`
 - `OUTPUT/earth_movie_jd2453789_24h_20min_color_pad_vflip.mp4`
-

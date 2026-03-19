@@ -162,6 +162,10 @@ This writes a float64 FITS cube with scalar and RGB layers, including:
 and `ECLASS` when a class map is active.
 (`RAD_EAR` is layer 1, and `RAD_R/G/B` carry the color-capable Earth radiance channels.)
 
+When the first-order Earth atmosphere is enabled, the cube also includes atmosphere diagnostics such as:
+`RAD_SURF, IF_SURF, RAD_ATM, ATM_R, ATM_G, ATM_B, ATMTOT, ATMT_R, ATMT_G, ATMT_B`.
+In that mode, `RAD_EAR` / `RAD_R/G/B` are atmosphere-inclusive totals.
+
 Earth glint model switch in `scene.toml`:
 
 ```toml
@@ -171,6 +175,22 @@ ocean_wind_m_s = 6.0
 ocean_refractive_index = 1.334
 ocean_glint_strength = 0.15
 ```
+
+First-order Earth atmosphere switch in `scene.toml`:
+
+```toml
+[earth]
+atmosphere_enable = true
+atmosphere_strength = 0.12
+rayleigh_tau_rgb = [0.10, 0.06, 0.03]
+aerosol_tau_rgb = [0.02, 0.02, 0.018]
+aerosol_g = 0.70
+```
+
+This is a first-pass physically motivated model:
+- surface radiance is attenuated by atmospheric transmission
+- single-scattered Rayleigh + aerosol path radiance is added in RGB
+- the effect is strongest toward the limb and near the illuminated edge, not as a generic screen-space haze
 
 Optional Earth surface-class workflow (0=ocean, 1=land, 2=ice):
 
