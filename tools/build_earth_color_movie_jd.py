@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+from astropy.io import fits
+from astropy.time import Time
+from PIL import Image
+
+
+def jd_to_utc(jd: float) -> str:
+    return Time(float(jd), format="jd", scale="utc").isot + "Z"
+
+
+def frame_jds(start_jd: float, end_jd: float, step_hours: float) -> list[float]:
+    if step_hours <= 0:
+        raise ValueError("--step-hours must be > 0")
+    step_days = float(step_hours) / 24.0
+    vals: list[float] = []
+    x = float(start_jd)
+    end = float(end_jd)
+    eps = step_days * 1.0e-6 + 1.0e-12
+    while x <= end + eps:
+        vals.append(x)
+        x += step_days
+    return vals
+
+
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description="Render an Earth-only color movie over a JD range.")
+    ap.add_argument("--config", default="scene.toml")
+    ap.add_argument("--start-jd", type=float, required=True)
+    ap.add_argument("--end-jd", type=float, required=True)
+    ap.add_argument("--step-hours", type=float, required=True)
+    ap.add_argument("--nx", type=int, default=1024)
+    ap.add_argument("--ny", type=int, default=1024)
+    ap.add_argument("--fps", type=int, default=12)
+    ap.add_argument("--crf", type=int, default=18)
+    ap.add_argument("--workdir", default="/tmp/synthmoon_earth_movie")
+    ap.add_argument("--out-mp4", default="OUTPUT/earth_movie_jd_color.mp4")
+    ap.add_argument("--keep-frames", action="store_true")
+    ap.add_argument("--scale-pct", type=float, default=99.7)
+    ap.add_argument("--scale-abs", type=float, default=None, help="Absolute radiance scale for RGB channels.")
+    ap.add_argument("--pad-frac", type=float, default=0.10, help="Black padding fraction to add on each side of the frame.")
+    return ap.parse_args()
+
+
+def auto_scale(rgb: np.ndarray, pct: float) -> float:
+    valid = np.isfinite(rgb).all(axis=-1)
+    if not np.any(valid):
+        return 1.0
+    val = float(np.nanpercentile(rgb[valid], pct))
+    return max(val, 1.0e-12)
+
+
+def write_rgb_png(rgb: np.ndarray, out_path: Path, scale: float, pad_frac: float = 0.0) -> None:
+    x = np.clip(np.asarray(rgb, dtype=np.float64) / float(scale), 0.0, 1.0)
+    x = np.power(x, 1.0 / 2.2)
+    x[~np.isfinite(x)] = 0.0
+    img8 = np.clip(np.rint(255.0 * x), 0, 255).astype(np.uint8)
+    p = max(float(pad_frac), 0.0)
+    if p > 0.0:
+        ny, nx, nc = img8.shape
+        pad_x = int(np.rint(nx * p))
+        pad_y = int(np.rint(ny * p))
+        canvas = np.zeros((ny + 2 * pad_y, nx + 2 * pad_x, nc), dtype=np.uint8)
+        canvas[pad_y:pad_y + ny, pad_x:pad_x + nx, :] = img8
+        img8 = canvas
+    Image.fromarray(img8, mode="RGB").save(out_path)
+
+
+def encode_video(frame_glob: str, out_path: Path, fps: int, crf: int) -> None:
+    cmd = [
+        "ffmpeg", "-y",
+        "-framerate", str(int(fps)),
+        "-i", frame_glob,
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-crf", str(int(crf)),
+        str(out_path),
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def main() -> None:
+    args = parse_args()
+    if shutil.which("ffmpeg") is None:
+        raise SystemExit("ffmpeg not found in PATH")
+    if args.end_jd < args.start_jd:
+        raise SystemExit("--end-jd must be >= --start-jd")
+
+    jds = frame_jds(args.start_jd, args.end_jd, args.step_hours)
+    if not jds:
+        raise SystemExit("No frames requested")
+
+    workdir = Path(args.workdir)
+    fits_dir = workdir / "fits"
+    png_dir = workdir / "png"
+    if workdir.exists() and not args.keep_frames:
+        shutil.rmtree(workdir)
+    fits_dir.mkdir(parents=True, exist_ok=True)
+    png_dir.mkdir(parents=True, exist_ok=True)
+
+    scale = float(args.scale_abs) if args.scale_abs is not None else None
+
+    env = dict(os.environ)
+    env["UV_CACHE_DIR"] = "/tmp/uvcache"
+
+    for i, jd in enumerate(jds):
+        utc = jd_to_utc(jd)
+        fits_path = fits_dir / f"earth_{i:05d}.fits"
+        subprocess.run(
+            [
+                "uv", "run", "python", "tools/render_earth_fits.py",
+                "--config", args.config,
+                "--jd", f"{jd:.10f}",
+                "--nx", str(int(args.nx)),
+                "--ny", str(int(args.ny)),
+                "--out", str(fits_path),
+            ],
+            check=True,
+            env=env,
+        )
+
+        cube = np.asarray(fits.getdata(fits_path), dtype=np.float64)
+        if cube.ndim != 3 or cube.shape[0] < 5:
+            raise RuntimeError(f"Unexpected Earth cube shape for {fits_path}: {cube.shape}")
+        rgb = np.stack([cube[2], cube[3], cube[4]], axis=-1)
+        if scale is None:
+            scale = auto_scale(rgb, args.scale_pct)
+            print(f"Earth RGB scaling: scale={scale:.6g} (p{args.scale_pct:g} of first frame)")
+        write_rgb_png(rgb, png_dir / f"frame_{i:05d}.png", scale, pad_frac=args.pad_frac)
+
+        if (i + 1) == 1 or (i + 1) == len(jds) or ((i + 1) % 10 == 0):
+            print(f"[{i+1:4d}/{len(jds)}] JD={jd:.7f} UTC={utc}")
+
+    out_mp4 = Path(args.out_mp4)
+    out_mp4.parent.mkdir(parents=True, exist_ok=True)
+    encode_video(str(png_dir / "frame_%05d.png"), out_mp4, args.fps, args.crf)
+    print(f"Wrote Earth MP4: {out_mp4}")
+
+    if not args.keep_frames:
+        shutil.rmtree(workdir)
+        print(f"Removed temporary workdir: {workdir}")
+    else:
+        print(f"Kept frames and FITS in: {workdir}")
+
+
+if __name__ == "__main__":
+    main()

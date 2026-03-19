@@ -64,6 +64,10 @@ uv run python -m synthmoon.run_v0 --config scene.toml
 
 Output FITS is written to `OUTPUT/` by default.
 
+Standard Moon-image renders now apply a default Gaussian PSF before the final output downsampling.
+The default is `psf_mode = "gaussian"` with `psf_fwhm_out_px = 0.85` in `scene.toml`.
+Written Moon FITS headers record `PSFMODE`, `PSFSIG`, `PSFFWHM`, `PSFOUT`, and `SUMPIX`.
+
 ### 5) Single image from Earth lon/lat at a given Julian Day
 
 The renderer accepts UTC as input (`time.utc` or `--utc`).  
@@ -153,9 +157,10 @@ uv run python tools/render_earth_fits.py \
   --out OUTPUT/earth_synth_20060217T061845Z.fits
 ```
 
-This writes a float64 FITS cube with layers:
-`RAD_EAR, IF_EARTH, ECLASS, A_EFF, A_SURF, CLOUDF, MU0, MUV, FSUN, ELON, ELAT, MASK`.
-(`RAD_EAR` is layer 1.)
+This writes a float64 FITS cube with scalar and RGB layers, including:
+`RAD_EAR, IF_EARTH, RAD_R, RAD_G, RAD_B, IF_R, IF_G, IF_B, A_EFF, AEFF_R, AEFF_G, AEFF_B, A_SURF, ASRF_R, ASRF_G, ASRF_B, CLOUDF, MU0, MUV, FSUN, ELON, ELAT, MASK`
+and `ECLASS` when a class map is active.
+(`RAD_EAR` is layer 1, and `RAD_R/G/B` carry the color-capable Earth radiance channels.)
 
 Earth glint model switch in `scene.toml`:
 
@@ -180,7 +185,7 @@ Then enable in `scene.toml`:
 ```toml
 [earth]
 class_map_fits = "DATA/earth_class_map.fits"
-class_map_lon_mode = "0_360"
+class_map_lon_mode = "-180_180"
 class_map_interp = "nearest"
 class_ocean_values = [0]
 class_land_values = [1]
@@ -198,27 +203,28 @@ EO-derived class map from MODIS land cover:
 ```bash
 uv run python tools/make_earth_class_map_from_modis_landcover.py \
   --in-hdf 'DATA/MODIS/MCD12C1*.hdf' \
-  --out-fits DATA/MODIS/earth_class_map_modis_2011.fits
+  --scheme modis_igbp \
+  --out-fits DATA/MODIS/earth_landcover_modis_2011.fits
 ```
 
-This maps MODIS LC_Type1 classes as:
-- water (`0`) -> ocean class
-- permanent snow/ice (`15`) -> ice class
-- everything else -> land class
+This preserves the raw MODIS LC_Type1 / IGBP class ids so the renderer can distinguish
+water, forest, shrubland, grassland, cropland, urban, permanent snow/ice, barren desert, etc.
+The default `modis_igbp` RGB preset then assigns approximate visible reflectance colors per class.
 
 Then enable it explicitly:
 
 ```toml
 [earth]
-class_map_fits = "DATA/MODIS/earth_class_map_modis_2011.fits"
-class_map_lon_mode = "-180_180"
+class_map_fits = "DATA/MODIS/earth_landcover_modis_2011.fits"
+class_map_lon_mode = "0_360"
 class_map_interp = "nearest"
 class_ocean_values = [0]
-class_land_values = [1]
-class_ice_values = [2]
+class_land_values = []
+class_ice_values = [15]
+class_rgb_preset = "modis_igbp"
 ```
 
-Use this only if you want class-driven land/ocean/ice behavior. The recommended EO default still works without any class map.
+Use this if you want richer surface typing and color-capable Earth products. The simpler EO default still works without any class map.
 
 Earthdata token setup for EO downloads:
 
@@ -375,7 +381,7 @@ class_ice_values = []
 ```
 
 This keeps Earth land-surface classification possible, but separate from the old toy class map:
-- if you want class-based land/ocean/ice logic later, provide a proper EO-derived class map and set `class_map_fits`
+- if you want richer land-cover-aware color, provide a proper EO-derived class map and set `class_map_fits`
 - if you do not have that yet, the recommended path is albedo + clouds + daily sea ice + static land ice, with `class_map_fits = ""`
 
 Regression check for earthlight layers (IF_EARTH/RAD_EAR non-zero at a known UTC):
@@ -445,6 +451,27 @@ python tools/build_movie_video_hourly.py \
   --workdir /tmp/synthmoon_movie_frames \
   --tmp-fits /tmp/synthmoon_movie_frame.fits \
   --crf 18
+```
+
+Earth-only color movie over a JD range, with optional black padding around the disk:
+```bash
+uv run python tools/build_earth_color_movie_jd.py \
+  --config scene.toml \
+  --start-jd 2453789.7630208 \
+  --end-jd 2453790.7630208 \
+  --step-hours 0.3333333333 \
+  --nx 1024 --ny 1024 \
+  --pad-frac 0.10 \
+  --out-mp4 OUTPUT/earth_movie_jd_color.mp4
+```
+
+This uses the Earth RGB radiance layers (`RAD_R/G/B`) from `tools/render_earth_fits.py`
+and writes a color MP4. If needed, flip the result for playback with:
+
+```bash
+ffmpeg -y -i OUTPUT/earth_movie_jd_color.mp4 -vf vflip \
+  -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p \
+  OUTPUT/earth_movie_jd_color_vflip.mp4
 ```
 
 ## Notes

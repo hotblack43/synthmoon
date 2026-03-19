@@ -77,6 +77,45 @@ def _downsample_mean2d(arr: np.ndarray, out_ny: int, out_nx: int) -> np.ndarray:
     return xr.mean(axis=(1, 3), dtype=np.float64)
 
 
+def _gaussian_kernel1d_sigma_px(sigma_px: float, truncate: float = 4.0) -> np.ndarray:
+    sigma = float(sigma_px)
+    if sigma <= 0.0:
+        return np.array([1.0], dtype=np.float64)
+    radius = max(1, int(np.ceil(truncate * sigma)))
+    x = np.arange(-radius, radius + 1, dtype=np.float64)
+    k = np.exp(-0.5 * (x / sigma) ** 2)
+    s = float(k.sum())
+    if s <= 0.0 or not np.isfinite(s):
+        return np.array([1.0], dtype=np.float64)
+    return k / s
+
+
+def _convolve_axis_reflect(arr: np.ndarray, kernel: np.ndarray, axis: int) -> np.ndarray:
+    x = np.asarray(arr, dtype=np.float64)
+    if x.ndim != 2:
+        raise ValueError(f"Expected 2D array for convolution, got shape={x.shape}")
+    radius = int(len(kernel) // 2)
+    if radius == 0:
+        return x.copy()
+    pad_spec = [(0, 0), (0, 0)]
+    pad_spec[axis] = (radius, radius)
+    xp = np.pad(x, pad_spec, mode="reflect")
+    out = np.zeros_like(x, dtype=np.float64)
+    if axis == 0:
+        for i, w in enumerate(kernel):
+            out += float(w) * xp[i:i + x.shape[0], :]
+    else:
+        for i, w in enumerate(kernel):
+            out += float(w) * xp[:, i:i + x.shape[1]]
+    return out
+
+
+def _gaussian_blur2d(arr: np.ndarray, sigma_px: float) -> np.ndarray:
+    kernel = _gaussian_kernel1d_sigma_px(float(sigma_px))
+    tmp = _convolve_axis_reflect(arr, kernel, axis=1)
+    return _convolve_axis_reflect(tmp, kernel, axis=0)
+
+
 def _tangent_basis(boresight_u: np.ndarray, north_hint_u: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return (right, up) unit vectors in the plane tangent to boresight."""
     up = north_hint_u - np.dot(north_hint_u, boresight_u) * boresight_u
@@ -1089,6 +1128,31 @@ def main(argv: list[str] | None = None) -> None:
     out_ny = int(cfg.output.get("downsample_to_ny", render_ny) or render_ny)
     if (out_nx <= 0) or (out_ny <= 0):
         raise ValueError(f"Invalid downsample target: ({out_nx},{out_ny})")
+    psf_mode = str(cfg.output.get("psf_mode", "gaussian")).strip().lower()
+    psf_sigma_px = float(cfg.output.get("psf_sigma_px", 0.0) or 0.0)
+    psf_fwhm_px = float(cfg.output.get("psf_fwhm_px", 0.0) or 0.0)
+    psf_fwhm_out_px = float(cfg.output.get("psf_fwhm_out_px", 0.85) or 0.0)
+    if psf_sigma_px <= 0.0 and psf_fwhm_px <= 0.0 and psf_fwhm_out_px > 0.0:
+        sx = float(render_nx) / float(out_nx)
+        sy = float(render_ny) / float(out_ny)
+        psf_fwhm_px = psf_fwhm_out_px * 0.5 * (sx + sy)
+    if psf_sigma_px <= 0.0 and psf_fwhm_px > 0.0:
+        psf_sigma_px = psf_fwhm_px / 2.3548200450309493
+    if psf_mode in ("none", "", "off"):
+        psf_sigma_px = 0.0
+        psf_fwhm_px = 0.0
+    elif psf_mode != "gaussian":
+        raise ValueError(f"Unsupported output.psf_mode={psf_mode!r}; supported: none, gaussian")
+
+    # Apply PSF at the internal render resolution, before detector-like downsampling.
+    if psf_sigma_px > 0.0:
+        img_if_total = _gaussian_blur2d(img_if_total, psf_sigma_px)
+        img_if_sun = _gaussian_blur2d(img_if_sun, psf_sigma_px)
+        img_if_earth = _gaussian_blur2d(img_if_earth, psf_sigma_px)
+        img_rad_total = _gaussian_blur2d(img_rad_total, psf_sigma_px)
+        img_rad_sun = _gaussian_blur2d(img_rad_sun, psf_sigma_px)
+        img_rad_earth = _gaussian_blur2d(img_rad_earth, psf_sigma_px)
+
     if (out_nx != render_nx) or (out_ny != render_ny):
         img_if_total = _downsample_mean2d(img_if_total, out_ny, out_nx)
         img_if_sun = _downsample_mean2d(img_if_sun, out_ny, out_nx)
@@ -1174,6 +1238,11 @@ def main(argv: list[str] | None = None) -> None:
 
     sc = scale_to_0_65535_float(img_if_total)
 
+    header_cards["PSFMODE"] = (psf_mode[:16], "Moon-image PSF mode")
+    header_cards["PSFSIG"] = (psf_sigma_px, "PSF sigma on render grid px")
+    header_cards["PSFFWHM"] = (psf_fwhm_px, "PSF FWHM on render grid px")
+    header_cards["PSFOUT"] = (psf_fwhm_out_px if psf_mode != "none" else 0.0, "PSF FWHM on output grid px")
+
     layers = {
         "SCALED":   (sc.scaled, "0..65535 (float)"),
         "IFTOTAL":  (img_if_total, "I/F"),
@@ -1228,6 +1297,10 @@ def main(argv: list[str] | None = None) -> None:
         header_cards["ONLYLAY"] = (only_i, "Only Nth layer written (1-based)")
         header_cards["ONLYNAME"] = (k, "Name of ONLYLAY")
 
+    if len(layers) == 1:
+        only_name = next(iter(layers.keys()))
+        only_arr = np.asarray(layers[only_name][0], dtype=np.float64)
+        header_cards["SUMPIX"] = (float(np.nansum(only_arr)), "Sum of written image pixels")
 
 
     if write_cube:

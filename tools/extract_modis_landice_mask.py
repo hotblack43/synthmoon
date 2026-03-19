@@ -152,12 +152,12 @@ def main() -> None:
 
     hdr = fits.Header()
     hdr["BUNIT"] = ("1", "Static land ice mask")
-    hdr["LONMODE"] = ("-180_180", "Longitude convention for equirectangular map")
+    hdr["LONMODE"] = ("0_360", "Longitude convention for equirectangular map")
     hdr["LCFILE"] = (in_hdf.name, "MODIS land-cover source")
     hdr["LCSDS"] = (sds_name[:68], "Source SDS")
     hdr["LCMODE"] = (str(args.mode), "Land-ice extract mode")
     hdr["LCIVAL"] = (float(args.snow_ice_class), "Class treated as permanent land ice")
-    hdr["COMMENT"] = "Rows run north-to-south; columns run -180..180 eastward."
+    hdr["COMMENT"] = "Rows run north-to-south; columns run 0..360 eastward."
     Path(args.out_fits).parent.mkdir(parents=True, exist_ok=True)
     fits.PrimaryHDU(data=mask, header=hdr).writeto(args.out_fits, overwrite=True, output_verify="silentfix")
     print(f"{sds_name} -> {args.out_fits}")

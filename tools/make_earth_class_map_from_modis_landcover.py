@@ -105,6 +105,12 @@ def main() -> None:
     ap.add_argument("--in-hdf", required=True, help="Input MCD12C1/MCD12Q1 HDF file (glob accepted if unique)")
     ap.add_argument("--out-fits", required=True, help="Output class-map FITS (2D)")
     ap.add_argument("--sds", default=None, help="Optional exact SDS name; otherwise a known candidate is used")
+    ap.add_argument(
+        "--scheme",
+        default="collapsed",
+        choices=("collapsed", "modis_igbp"),
+        help="Output scheme: collapsed ocean/land/ice classes, or preserve raw MODIS IGBP class ids",
+    )
     ap.add_argument("--water-class-value", type=float, default=0.0, help="MODIS LC_Type1 value treated as water/ocean")
     ap.add_argument("--snow-ice-class-value", type=float, default=15.0, help="MODIS LC_Type1 value treated as permanent snow/ice")
     ap.add_argument("--ocean-class", type=int, default=0, help="Output class value for ocean")
@@ -135,20 +141,27 @@ def main() -> None:
     tmp_out.unlink(missing_ok=True)
     lc[~np.isfinite(lc)] = np.nan
 
-    cls = np.full(lc.shape, int(args.land_class), dtype=np.int16)
-    water = np.abs(lc - float(args.water_class_value)) <= 0.5
-    ice = np.abs(lc - float(args.snow_ice_class_value)) <= 0.5
-    cls[water] = int(args.ocean_class)
-    cls[ice] = int(args.ice_class)
+    if args.scheme == "modis_igbp":
+        cls = np.rint(lc).astype(np.int16)
+        cls[~np.isfinite(lc)] = -999
+        classdef = "MODIS IGBP LC_Type1 class ids preserved"
+    else:
+        cls = np.full(lc.shape, int(args.land_class), dtype=np.int16)
+        water = np.abs(lc - float(args.water_class_value)) <= 0.5
+        ice = np.abs(lc - float(args.snow_ice_class_value)) <= 0.5
+        cls[water] = int(args.ocean_class)
+        cls[ice] = int(args.ice_class)
+        classdef = f"{int(args.ocean_class)}=ocean,{int(args.land_class)}=land,{int(args.ice_class)}=ice"
 
     hdr = fits.Header()
-    hdr["CLASSDEF"] = (f"{int(args.ocean_class)}=ocean,{int(args.land_class)}=land,{int(args.ice_class)}=ice", "Output class definitions")
+    hdr["CLASSDEF"] = (classdef[:68], "Output class definitions")
+    hdr["CLSCHM"] = (args.scheme[:16], "Class-map output scheme")
     hdr["LCFILE"] = (in_hdf.name, "MODIS land-cover source")
     hdr["LCSDS"] = (sds_name[:68], "Source SDS")
     hdr["LCWATER"] = (float(args.water_class_value), "MODIS class treated as ocean")
     hdr["LCICE"] = (float(args.snow_ice_class_value), "MODIS class treated as permanent ice")
-    hdr["LONMODE"] = ("-180_180", "Longitude convention for equirectangular map")
-    hdr["COMMENT"] = "Rows run north-to-south; columns run -180..180 eastward."
+    hdr["LONMODE"] = ("0_360", "Longitude convention for equirectangular map")
+    hdr["COMMENT"] = "Rows run north-to-south; columns run 0..360 eastward."
     Path(args.out_fits).parent.mkdir(parents=True, exist_ok=True)
     fits.PrimaryHDU(data=cls, header=hdr).writeto(args.out_fits, overwrite=True, output_verify="silentfix")
     print(f"{sds_name} -> {args.out_fits}")

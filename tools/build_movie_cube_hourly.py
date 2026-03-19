@@ -48,6 +48,7 @@ def main() -> None:
     tmp_frame = Path(args.tmp_frame)
 
     cube = None
+    first_hdr = None
     utc_list: list[str] = []
     jd_list: list[float] = []
 
@@ -78,6 +79,7 @@ def main() -> None:
             ny, nx = frame.shape
             dtype = np.float32 if args.dtype == "float32" else np.float64
             cube = np.empty((n, ny, nx), dtype=dtype)
+            first_hdr = hdr.copy()
 
         cube[i] = frame.astype(cube.dtype, copy=False)
         utc_list.append(str(hdr.get("DATE-OBS", utc)))
@@ -90,7 +92,8 @@ def main() -> None:
 
     h = fits.Header()
     h["RUNMODE"] = ("movie_hourly", "Hourly movie cube")
-    h["BUNIT"] = ("I/F", "Radiance factor")
+    bunit = str(first_hdr.get("BUNIT", "")) if first_hdr is not None else ""
+    h["BUNIT"] = (bunit[:68], "Frame unit from render output")
     h["NFRAMES"] = (int(n), "Number of frames")
     h["DT_HR"] = (int(step), "Step hours")
     h["UTC0"] = (utc_list[0], "First frame UTC")
@@ -98,6 +101,10 @@ def main() -> None:
     h["JD0"] = (float(jd_list[0]), "First frame JD")
     h["JDN"] = (float(jd_list[-1]), "Last frame JD")
     h["AXIS3"] = ("time", "Frame axis")
+    if first_hdr is not None:
+        for k in ("LAYER", "PSFMODE", "PSFSIG", "PSFFWHM", "PSFOUT", "ONLYLAY", "ONLYNAME"):
+            if k in first_hdr:
+                h[k] = (first_hdr[k], first_hdr.comments[k])
     h.add_history("Frame i uses UTC = UTC0 + i*DT_HR hours.")
     h.add_history(f"Rendered from config: {cfg}")
 
@@ -107,4 +114,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

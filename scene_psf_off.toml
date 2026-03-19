@@ -31,7 +31,7 @@ limb_offset_scale = 1.0   # 1.0=exact limb, <1 inward, >1 slightly beyond limb (
 [paths]
 spice_kernels_dir = "KERNELS"
 meta_kernel = "KERNELS/generic.tm"
-out_fits = "OUTPUT/synth_moon_advanced_dem_maunaloa.fits"
+out_fits = "OUTPUT/synth_moon_psf_off.fits"
 
 [moon]
 radius_km = 1737.4
@@ -93,18 +93,15 @@ earthlight_tile_px = 16
 albedo_map_fits = "DATA/earth_albedo.fits"
 albedo_map_lon_mode = "0_360"
 
-# Optional Earth surface class map FITS (equirectangular).
-# Here we use preserved MODIS IGBP class ids so land-cover-specific RGB can be assigned.
-class_map_fits = "DATA/MODIS/earth_landcover_modis_2011.fits"
-class_map_lon_mode = "-180_180"
+# Optional Earth surface class map FITS (equirectangular):
+# class IDs are user-defined, e.g. 0=ocean, 1=land, 2=ice.
+# Leave this disabled for the EO workflow unless you have built a proper EO-derived class map.
+class_map_fits = ""
+class_map_lon_mode = "0_360"
 class_map_interp = "nearest"
 class_ocean_values = [0]
-class_land_values = []
-class_ice_values = [15]
-class_rgb_preset = "modis_igbp"
-class_rgb_default = [0.20, 0.20, 0.20]
-cloud_rgb = [0.78, 0.80, 0.82]
-ice_rgb = [0.78, 0.82, 0.86]
+class_land_values = [1]
+class_ice_values = []
 
 # Optional daily sea-ice fraction map (0..1 on lon/lat grid). Prefer this over fake latitude caps.
 ice_fraction_map_fits = "DATA/NSIDC/ice_fraction_20110706.fits"
@@ -168,8 +165,7 @@ mode = "dem"
 sun = "dem"
 
 [output]
-psf_mode = "gaussian"
-psf_fwhm_out_px = 0.85         # small-telescope Moon PSF at final output scale
+psf_mode = "none"
 # Keep computations float. For convenient viewing in DS9, the primary cube is scaled to 0..65535 in float.
 primary_dtype = "float64"          # "float32" or "float64"
 primary_scaled_0_65535 = true
