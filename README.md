@@ -216,7 +216,7 @@ Important:
 - this helper currently builds a simple class map from the existing albedo map
 - it is useful for testing class-driven logic
 - it is not the recommended default for the EO workflow described below
-- for the EO workflow, leave `class_map_fits = ""` unless you have built a proper EO-derived class map
+- for the EO workflow, keep `class_map_fits` enabled if you have a proper class map, because the EO movie builder now preserves it
 
 EO-derived class map from MODIS land cover:
 
@@ -382,7 +382,7 @@ Current recommended EO-Earth default:
 ```toml
 [earth]
 albedo_map_fits = "DATA/earth_albedo.fits"
-class_map_fits = ""
+class_map_fits = "DATA/MODIS/earth_landcover_modis_2011.fits"
 
 cloud_fraction_map_fits = "DATA/MODIS/<daily_prefix>_cloud_fraction.fits"
 cloud_tau_map_fits = "DATA/MODIS/<daily_prefix>_cloud_tau.fits"
@@ -400,9 +400,10 @@ seasonal_ice_enable = false
 class_ice_values = []
 ```
 
-This keeps Earth land-surface classification possible, but separate from the old toy class map:
-- if you want richer land-cover-aware color, provide a proper EO-derived class map and set `class_map_fits`
-- if you do not have that yet, the recommended path is albedo + clouds + daily sea ice + static land ice, with `class_map_fits = ""`
+This keeps the daily EO products while preserving land-cover-aware surface colour:
+- `tools/build_earth_color_movie_jd_eo.py` rewrites the daily cloud, sea-ice, and land-ice inputs
+- it does not blank `class_map_fits`
+- it does force `seasonal_ice_enable = false` to avoid stacking synthetic seasonal ice on top of real NSIDC sea ice
 
 Regression check for earthlight layers (IF_EARTH/RAD_EAR non-zero at a known UTC):
 ```bash
@@ -493,6 +494,40 @@ ffmpeg -y -i OUTPUT/earth_movie_jd_color.mp4 -vf vflip \
   -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p \
   OUTPUT/earth_movie_jd_color_vflip.mp4
 ```
+
+EO-aware Earth-only color movie over a JD range, with daily MODIS/NSIDC updates and automatic RGB-sums CSV plus plots:
+```bash
+uv run python tools/build_earth_color_movie_jd_eo_fast.py \
+  --config scene.toml \
+  --start-jd 2453789.7630208 \
+  --end-jd 2453791.7630208 \
+  --step-hours 0.1666666667 \
+  --nx 1024 --ny 1024 \
+  --pad-frac 0.10 \
+  --out-mp4 OUTPUT/earth_movie_2d_10min_eo_fast_atm_on.mp4 \
+  --fetch-missing
+```
+
+Notes:
+- `--fetch-missing` downloads missing daily EO inputs
+- this fast path keeps rendering in one Python process, reuses loaded kernels/maps, and avoids per-frame FITS write/read churn
+- by default it writes `<out-mp4 stem>_rgb.csv` with columns `jd,sum_r,sum_g,sum_b`
+- by default it also writes `<out-mp4 stem>_ratio_combined.png` and `<out-mp4 stem>_mag_combined.png`
+- unless you add `--keep-frames`, the script removes its temporary PNG/config workdir after encoding the movie
+- `--pad-frac` adds a black border around the frame, expressed as a fraction of width/height on each side
+- the EO movie builder preserves `class_map_fits` if your base config enables a land-cover class map
+- if you do not want the plots, add `--no-rgb-plots`
+
+The simple plotting script can still be used directly if you already have a movie-time CSV:
+```bash
+uv run python tools/plot_earth_rgb_simple_csv.py \
+  --csv OUTPUT/earth_movie_2d_10min_eo_fast_atm_on_rgb.csv \
+  --out-prefix OUTPUT/earth_movie_2d_10min_eo_fast_atm_on
+```
+
+This writes:
+- `..._ratio_combined.png` with `R/G`, `R/B`, `G/B`
+- `..._mag_combined.png` with `$m_R - m_G$`, `$m_R - m_B$`, and `$m_B - m_G$`
 
 ## Notes
 

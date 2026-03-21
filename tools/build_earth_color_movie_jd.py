@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import shutil
 import subprocess
@@ -44,6 +45,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--crf", type=int, default=18)
     ap.add_argument("--workdir", default="/tmp/synthmoon_earth_movie")
     ap.add_argument("--out-mp4", default="OUTPUT/earth_movie_jd_color.mp4")
+    ap.add_argument("--rgb-sums-csv", default=None, help="Optional CSV path for per-frame JD,R,G,B sums.")
     ap.add_argument("--keep-frames", action="store_true")
     ap.add_argument("--scale-pct", type=float, default=99.7)
     ap.add_argument("--scale-abs", type=float, default=None, help="Absolute radiance scale for RGB channels.")
@@ -66,6 +68,17 @@ def layer_index_from_header(header: fits.Header, layer_name: str) -> int:
         if str(header.get(f"LAY{i}", "")).strip().upper() == target:
             return i - 1
     raise KeyError(f"Layer {layer_name} not found in FITS header")
+
+
+def channel_sums(cube: np.ndarray, header: fits.Header) -> tuple[float, float, float]:
+    sums: list[float] = []
+    for key, layer_name in [("SUMRADR", "RAD_R"), ("SUMRADG", "RAD_G"), ("SUMRADB", "RAD_B")]:
+        val = header.get(key)
+        if val is None:
+            idx = layer_index_from_header(header, layer_name)
+            val = float(np.nansum(cube[idx]))
+        sums.append(float(val))
+    return sums[0], sums[1], sums[2]
 
 
 def write_rgb_png(rgb: np.ndarray, out_path: Path, scale: float, pad_frac: float = 0.0) -> None:
@@ -117,42 +130,60 @@ def main() -> None:
     png_dir.mkdir(parents=True, exist_ok=True)
 
     scale = float(args.scale_abs) if args.scale_abs is not None else None
+    rgb_csv_path = Path(args.rgb_sums_csv) if args.rgb_sums_csv else None
+    rgb_csv_file = None
+    rgb_csv_writer = None
+    if rgb_csv_path is not None:
+        rgb_csv_path.parent.mkdir(parents=True, exist_ok=True)
+        rgb_csv_file = rgb_csv_path.open("w", newline="", encoding="utf-8")
+        rgb_csv_writer = csv.writer(rgb_csv_file)
+        rgb_csv_writer.writerow(["jd", "sum_r", "sum_g", "sum_b"])
 
     env = dict(os.environ)
     env["UV_CACHE_DIR"] = "/tmp/uvcache"
 
-    for i, jd in enumerate(jds):
-        utc = jd_to_utc(jd)
-        fits_path = fits_dir / f"earth_{i:05d}.fits"
-        subprocess.run(
-            [
-                "uv", "run", "python", "tools/render_earth_fits.py",
-                "--config", args.config,
-                "--jd", f"{jd:.10f}",
-                "--nx", str(int(args.nx)),
-                "--ny", str(int(args.ny)),
-                "--out", str(fits_path),
-            ],
-            check=True,
-            env=env,
-        )
+    try:
+        for i, jd in enumerate(jds):
+            utc = jd_to_utc(jd)
+            fits_path = fits_dir / f"earth_{i:05d}.fits"
+            subprocess.run(
+                [
+                    "uv", "run", "python", "tools/render_earth_fits.py",
+                    "--config", args.config,
+                    "--jd", f"{jd:.10f}",
+                    "--nx", str(int(args.nx)),
+                    "--ny", str(int(args.ny)),
+                    "--out", str(fits_path),
+                ],
+                check=True,
+                env=env,
+            )
 
-        with fits.open(fits_path) as hdul:
-            cube = np.asarray(hdul[0].data, dtype=np.float64)
-            header = hdul[0].header
-        if cube.ndim != 3 or cube.shape[0] < 5:
-            raise RuntimeError(f"Unexpected Earth cube shape for {fits_path}: {cube.shape}")
-        idx_r = layer_index_from_header(header, "RAD_R")
-        idx_g = layer_index_from_header(header, "RAD_G")
-        idx_b = layer_index_from_header(header, "RAD_B")
-        rgb = np.stack([cube[idx_r], cube[idx_g], cube[idx_b]], axis=-1)
-        if scale is None:
-            scale = auto_scale(rgb, args.scale_pct)
-            print(f"Earth RGB scaling: scale={scale:.6g} (p{args.scale_pct:g} of first frame)")
-        write_rgb_png(rgb, png_dir / f"frame_{i:05d}.png", scale, pad_frac=args.pad_frac)
+            with fits.open(fits_path) as hdul:
+                cube = np.asarray(hdul[0].data, dtype=np.float64)
+                header = hdul[0].header
+            if cube.ndim != 3 or cube.shape[0] < 5:
+                raise RuntimeError(f"Unexpected Earth cube shape for {fits_path}: {cube.shape}")
+            idx_r = layer_index_from_header(header, "RAD_R")
+            idx_g = layer_index_from_header(header, "RAD_G")
+            idx_b = layer_index_from_header(header, "RAD_B")
+            rgb = np.stack([cube[idx_r], cube[idx_g], cube[idx_b]], axis=-1)
+            if scale is None:
+                scale = auto_scale(rgb, args.scale_pct)
+                print(f"Earth RGB scaling: scale={scale:.6g} (p{args.scale_pct:g} of first frame)")
+            write_rgb_png(rgb, png_dir / f"frame_{i:05d}.png", scale, pad_frac=args.pad_frac)
+            if rgb_csv_writer is not None:
+                sum_r, sum_g, sum_b = channel_sums(cube, header)
+                rgb_csv_writer.writerow([f"{jd:.10f}", f"{sum_r:.15g}", f"{sum_g:.15g}", f"{sum_b:.15g}"])
+            del cube
+            if not args.keep_frames:
+                fits_path.unlink(missing_ok=True)
 
-        if (i + 1) == 1 or (i + 1) == len(jds) or ((i + 1) % 10 == 0):
-            print(f"[{i+1:4d}/{len(jds)}] JD={jd:.7f} UTC={utc}")
+            if (i + 1) == 1 or (i + 1) == len(jds) or ((i + 1) % 10 == 0):
+                print(f"[{i+1:4d}/{len(jds)}] JD={jd:.7f} UTC={utc}")
+    finally:
+        if rgb_csv_file is not None:
+            rgb_csv_file.close()
 
     out_mp4 = Path(args.out_mp4)
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
@@ -164,6 +195,8 @@ def main() -> None:
         print(f"Removed temporary workdir: {workdir}")
     else:
         print(f"Kept frames and FITS in: {workdir}")
+    if rgb_csv_path is not None:
+        print(f"Wrote Earth RGB sums CSV: {rgb_csv_path}")
 
 
 if __name__ == "__main__":

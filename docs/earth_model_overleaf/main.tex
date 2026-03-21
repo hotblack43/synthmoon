@@ -87,7 +87,7 @@ Figure~\ref{fig:atmcompare} shows the atmosphere-on and atmosphere-off compariso
 \end{figure}
 
 \section{Colour Evolution Over Three Days}
-To probe the time-dependent chromatic behaviour of the model, a three-day simulation was generated at a cadence of twenty minutes per frame, once with the atmosphere enabled and once with the atmosphere disabled. For each rendered Earth FITS cube, the summed radiances in the \texttt{RAD\_R}, \texttt{RAD\_G}, and \texttt{RAD\_B} layers were extracted from the FITS header. These time series were then reduced into broadband colour diagnostics in two equivalent forms: direct flux ratios such as \(R/G\), \(R/B\), and \(G/B\), and astronomical colour indices written as differences of magnitudes, such as \(m_R - m_G\), \(m_R - m_B\), and \(m_G - m_B\). The ratio form keeps the discussion in explicitly radiometric terms, while the colour-index form is often easier for astronomers to interpret because it compresses multiplicative changes into additive curves.
+To probe the time-dependent chromatic behaviour of the model, a three-day simulation was generated at a cadence of twenty minutes per frame, once with the atmosphere enabled and once with the atmosphere disabled. For each rendered Earth FITS cube, the summed radiances in the \texttt{RAD\_R}, \texttt{RAD\_G}, and \texttt{RAD\_B} layers were extracted from the FITS header. These time series were then reduced into broadband colour diagnostics in two equivalent forms: direct flux ratios such as \(R/G\), \(R/B\), and \(G/B\), and astronomical colour indices written as differences of magnitudes, such as \(m_R - m_G\), \(m_R - m_B\), and \(m_B - m_G\). The ratio form keeps the discussion in explicitly radiometric terms, while the colour-index form is often easier for astronomers to interpret because it compresses multiplicative changes into additive curves.
 
 The scientific point of these plots is not merely that the model Earth brightens and fades. The more interesting quantity is the evolution of the colour-changing part of the system. As the Earth rotates, different combinations of land, ocean, cloud, sea ice, glint geometry, and atmospheric path radiance rotate into view. Those changes alter the relative channel balance, not just the total flux. In that sense the colour curves provide a compact diagnostic of the model physics: they reveal whether the renderer is producing time-variable chromatic structure that is plausibly tied to changing surface and atmospheric conditions rather than only a scalar modulation of brightness.
 
@@ -103,7 +103,7 @@ Figure~\ref{fig:ratio3d} shows the three-day sequence in terms of flux ratios. T
 \begin{figure}[p]
   \centering
   \includegraphics[width=0.98\textwidth]{fig/earth_rgb_ratios_3d_20min_mag_combined.png}
-  \caption{The same three-day simulation expressed as colour indices, using astronomical notation \(m_R - m_G\), \(m_R - m_B\), and \(m_G - m_B\). This form emphasises chromatic evolution in a representation familiar to astronomers while remaining directly tied to the radiance ratios. Caption text to be refined after Overleaf upload.}
+  \caption{The same three-day simulation expressed as colour indices, using astronomical notation \(m_R - m_G\), \(m_R - m_B\), and \(m_B - m_G\). This form emphasises chromatic evolution in a representation familiar to astronomers while remaining directly tied to the radiance ratios. Caption text to be refined after Overleaf upload.}
   \label{fig:colourindex3d}
 \end{figure}
 

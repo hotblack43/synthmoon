@@ -1,0 +1,13 @@
+uv run python tools/build_earth_color_movie_jd_eo_fast.py \
+    --config scene.toml \
+    --start-jd 2453789.7630208 \
+    --end-jd 2453889.7630208 \
+    --step-hours 0.5 \
+    --nx 512 \
+    --ny 512 \
+    --fps 24 \
+    --crf 18 \
+    --pad-frac 0.15 \
+    --workdir /tmp/synthmoon_earth_movie_eo_fast_28d_30min_atm_on \
+    --out-mp4 OUTPUT/earth_movie_28d_30min_eo_fast_atm_on.mp4 \
+    --fetch-missing
