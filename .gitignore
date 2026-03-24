@@ -8,6 +8,9 @@ DATA/moon_albedo_*.fits
 *.aux.xml
 *.tiff
 DATA/
+!DATA/
+DATA/*
+!DATA/moon_albedo_lroc_wac643_016ppd_mean0p12.fits
 *.fits
 *.grd
 *.rds
