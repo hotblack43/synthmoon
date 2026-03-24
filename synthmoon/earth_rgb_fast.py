@@ -8,6 +8,14 @@ from astropy.time import Time
 
 from synthmoon.albedo_maps import EquirectMap, simple_cloud_fraction_field, toy_land_ocean_albedo
 from synthmoon.config import load_config
+from synthmoon.earth_rgb_physical import (
+    earth_color_model,
+    resolve_class_rgb_table,
+    resolve_cloud_rgb,
+    resolve_default_surface_rgb,
+    resolve_ice_rgb,
+    simple_brdf_factor,
+)
 from synthmoon.illumination import cox_munk_glint_albedo_increment
 from synthmoon.spice_tools import (
     AU_KM,
@@ -124,11 +132,8 @@ class EarthRGBFastRenderer:
         self.ice_interp = str(earth.get("ice_map_interp", "nearest"))
         self.land_ice_interp = str(earth.get("land_ice_mask_interp", "nearest"))
         self.scalar_interp = str(earth.get("albedo_map_interp", "nearest"))
-        self.default_surface_rgb = _parse_rgb_triplet(
-            earth.get("class_rgb_default", [0.20, 0.20, 0.20]),
-            (0.20, 0.20, 0.20),
-        )
-        self.class_rgb_table = _class_rgb_table(earth)
+        self.default_surface_rgb = resolve_default_surface_rgb(earth)
+        self.class_rgb_table = resolve_class_rgb_table(earth)
 
     def render_rgb(
         self,
@@ -276,7 +281,7 @@ class EarthRGBFastRenderer:
                 ocean_for_ice = ocean_cls.copy()
             else:
                 ocean_for_ice = a_surface <= max(float(earth.get("ocean_albedo", 0.06)), float(earth.get("ocean_glint_threshold", 0.12)))
-            ice_rgb = np.array(_parse_rgb_triplet(earth.get("ice_rgb", [0.78, 0.82, 0.86]), (0.78, 0.82, 0.86)), dtype=np.float64)
+            ice_rgb = np.array(resolve_ice_rgb(earth), dtype=np.float64)
             if bool(earth.get("ice_fraction_blend", True)):
                 w_ice = np.where(ocean_for_ice & valid_ice_frac, ice_frac, 0.0)
                 a_surface = (1.0 - w_ice) * a_surface + w_ice * float(earth.get("ice_albedo", 0.65))
@@ -297,7 +302,7 @@ class EarthRGBFastRenderer:
                 land_ice = np.where(both, np.maximum(land_ice, land_ice_alt), np.where(np.isfinite(land_ice), land_ice, land_ice_alt))
             valid_land_ice = np.isfinite(land_ice)
             land_ice = np.where(valid_land_ice, np.clip(land_ice, 0.0, 1.0), 0.0)
-            ice_rgb = np.array(_parse_rgb_triplet(earth.get("ice_rgb", [0.78, 0.82, 0.86]), (0.78, 0.82, 0.86)), dtype=np.float64)
+            ice_rgb = np.array(resolve_ice_rgb(earth), dtype=np.float64)
             if bool(earth.get("land_ice_mask_blend", False)):
                 w_land_ice = np.where(valid_land_ice, land_ice, 0.0)
                 a_surface = (1.0 - w_land_ice) * a_surface + w_land_ice * float(earth.get("ice_albedo", 0.65))
@@ -324,7 +329,7 @@ class EarthRGBFastRenderer:
             ice_mask = (lat >= lat_n_edge) | (lat <= -lat_s_edge)
             if ice_cls is not None:
                 ice_mask = ice_mask | ice_cls
-            ice_rgb = np.array(_parse_rgb_triplet(earth.get("ice_rgb", [0.78, 0.82, 0.86]), (0.78, 0.82, 0.86)), dtype=np.float64)
+            ice_rgb = np.array(resolve_ice_rgb(earth), dtype=np.float64)
             a_surface = np.array(a_surface, copy=True)
             a_surface[ice_mask] = float(earth.get("ice_albedo", 0.65))
             a_surface_rgb = np.array(a_surface_rgb, copy=True)
@@ -384,11 +389,23 @@ class EarthRGBFastRenderer:
             tau_local = np.full(lon.shape, tau, dtype=np.float64)
         trans = 1.0 - np.exp(-tau_k * tau_local)
         cloud_frac = np.clip(cloud_amt * trans * cloud_field, 0.0, 1.0)
-        cloud_rgb = np.array(_parse_rgb_triplet(earth.get("cloud_rgb", [0.78, 0.80, 0.82]), (0.78, 0.80, 0.82)), dtype=np.float64)
+        cloud_rgb = np.array(resolve_cloud_rgb(earth), dtype=np.float64)
         a_eff = (1.0 - cloud_frac) * a_surface + cloud_frac * cloud_alb
         a_eff = np.clip(a_eff, 0.0, 1.0) * float(earth.get("albedo", 1.0))
         a_eff_rgb = (1.0 - cloud_frac[:, None]) * a_surface_rgb + cloud_frac[:, None] * cloud_rgb[None, :]
         a_eff_rgb = np.clip(a_eff_rgb, 0.0, 1.0) * float(earth.get("albedo", 1.0))
+
+        brdf_factor = simple_brdf_factor(
+            earth,
+            class_id=class_id,
+            ocean_mask=ocean_cls,
+            ice_mask=ice_cls,
+            mu0=mu0,
+            muv=muv,
+        )
+        a_eff = np.clip(a_eff * brdf_factor, 0.0, 1.0)
+        a_eff_rgb = np.clip(a_eff_rgb * brdf_factor[:, None], 0.0, 1.0)
+
         a_eff_luma = 0.2126 * a_eff_rgb[:, 0] + 0.7152 * a_eff_rgb[:, 1] + 0.0722 * a_eff_rgb[:, 2]
         if self.earth_class_map is not None and np.any(np.isfinite(a_eff_luma)):
             a_eff = a_eff_luma

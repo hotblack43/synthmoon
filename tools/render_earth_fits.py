@@ -23,6 +23,14 @@ try:
     from synthmoon.fits_io import write_fits_cube
     from synthmoon.albedo_maps import EquirectMap, toy_land_ocean_albedo, simple_cloud_fraction_field
     from synthmoon.illumination import cox_munk_glint_albedo_increment
+    from synthmoon.earth_rgb_physical import (
+        earth_color_model,
+        resolve_class_rgb_table,
+        resolve_cloud_rgb,
+        resolve_default_surface_rgb,
+        resolve_ice_rgb,
+        simple_brdf_factor,
+    )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from synthmoon.config import load_config
@@ -37,6 +45,14 @@ except ModuleNotFoundError:
     from synthmoon.fits_io import write_fits_cube
     from synthmoon.albedo_maps import EquirectMap, toy_land_ocean_albedo, simple_cloud_fraction_field
     from synthmoon.illumination import cox_munk_glint_albedo_increment
+    from synthmoon.earth_rgb_physical import (
+        earth_color_model,
+        resolve_class_rgb_table,
+        resolve_cloud_rgb,
+        resolve_default_surface_rgb,
+        resolve_ice_rgb,
+        simple_brdf_factor,
+    )
 
 
 def _normalize(v: np.ndarray, eps: float = 1e-15) -> np.ndarray:
@@ -97,44 +113,8 @@ def _physical_layer_sum_cards(layers: dict[str, tuple[np.ndarray, str]]) -> dict
     return out
 
 
-def _default_modis_igbp_rgb_table() -> dict[int, tuple[float, float, float]]:
-    # Coarse broadband reflectance anchors for visible RGB rendering.
-    return {
-        0: (0.03, 0.06, 0.12),  # water
-        1: (0.05, 0.08, 0.04),  # evergreen needleleaf forest
-        2: (0.06, 0.10, 0.05),  # evergreen broadleaf forest
-        3: (0.08, 0.11, 0.06),  # deciduous needleleaf forest
-        4: (0.09, 0.13, 0.07),  # deciduous broadleaf forest
-        5: (0.07, 0.10, 0.05),  # mixed forests
-        6: (0.13, 0.12, 0.08),  # closed shrublands
-        7: (0.17, 0.16, 0.11),  # open shrublands
-        8: (0.16, 0.17, 0.10),  # woody savannas
-        9: (0.18, 0.18, 0.11),  # savannas
-        10: (0.16, 0.18, 0.10),  # grasslands
-        11: (0.10, 0.12, 0.08),  # permanent wetlands
-        12: (0.19, 0.18, 0.10),  # croplands
-        13: (0.15, 0.15, 0.15),  # urban / built-up
-        14: (0.18, 0.17, 0.10),  # cropland/natural vegetation mosaic
-        15: (0.78, 0.82, 0.86),  # permanent snow / ice
-        16: (0.34, 0.27, 0.18),  # barren / desert
-        17: (0.18, 0.18, 0.18),  # unclassified
-    }
-
-
 def _class_rgb_table(earth_cfg: dict) -> dict[int, tuple[float, float, float]]:
-    preset = str(earth_cfg.get("class_rgb_preset", "")).strip().lower()
-    table: dict[int, tuple[float, float, float]] = {}
-    if preset in ("modis_igbp", "igbp", "modis"):
-        table.update(_default_modis_igbp_rgb_table())
-    overrides = earth_cfg.get("class_rgb", {})
-    if isinstance(overrides, dict):
-        for k, v in overrides.items():
-            try:
-                kk = int(k)
-            except (TypeError, ValueError):
-                continue
-            table[kk] = _parse_rgb_triplet(v, table.get(kk, (0.20, 0.20, 0.20)))
-    return table
+    return resolve_class_rgb_table(earth_cfg)
 
 
 def _rgb_from_class_ids(
@@ -411,10 +391,7 @@ def main() -> None:
     class_id = None
     a_surface_rgb = None
     earth_scalar_interp = str(cfg.earth.get("albedo_map_interp", "nearest"))
-    default_surface_rgb = _parse_rgb_triplet(
-        cfg.earth.get("class_rgb_default", [0.20, 0.20, 0.20]),
-        (0.20, 0.20, 0.20),
-    )
+    default_surface_rgb = resolve_default_surface_rgb(cfg.earth)
     if earth_class_map is not None:
         cls = earth_class_map.sample_interp(lon, lat, interp=class_interp)
         class_id = cls
@@ -487,10 +464,7 @@ def main() -> None:
         if bool(cfg.earth.get("ice_fraction_blend", True)):
             w_ice = np.where(ocean_for_ice & valid_ice_frac, ice_frac, 0.0)
             a_surface = (1.0 - w_ice) * a_surface + w_ice * float(cfg.earth.get("ice_albedo", 0.65))
-            ice_rgb = np.array(
-                _parse_rgb_triplet(cfg.earth.get("ice_rgb", [0.78, 0.82, 0.86]), (0.78, 0.82, 0.86)),
-                dtype=np.float64,
-            )
+            ice_rgb = np.array(resolve_ice_rgb(cfg.earth), dtype=np.float64)
             a_surface_rgb = (1.0 - w_ice[:, None]) * a_surface_rgb + w_ice[:, None] * ice_rgb[None, :]
         else:
             ice_mask_map = ocean_for_ice & valid_ice_frac & (ice_frac >= float(cfg.earth.get("ice_fraction_threshold", 0.15)))
@@ -498,10 +472,7 @@ def main() -> None:
                 a_surface = np.array(a_surface, copy=True)
                 a_surface[ice_mask_map] = float(cfg.earth.get("ice_albedo", 0.65))
                 a_surface_rgb = np.array(a_surface_rgb, copy=True)
-                a_surface_rgb[ice_mask_map, :] = np.array(
-                    _parse_rgb_triplet(cfg.earth.get("ice_rgb", [0.78, 0.82, 0.86]), (0.78, 0.82, 0.86)),
-                    dtype=np.float64,
-                )[None, :]
+                a_surface_rgb[ice_mask_map, :] = np.array(resolve_ice_rgb(cfg.earth), dtype=np.float64)[None, :]
 
     if earth_land_ice_mask_map is not None:
         land_ice = np.asarray(earth_land_ice_mask_map.sample_interp(lon, lat, interp=land_ice_interp), dtype=np.float64)
@@ -516,10 +487,7 @@ def main() -> None:
             # land-cover class map mislabeled Antarctic pixels as ocean.
             w_land_ice = np.where(valid_land_ice, land_ice, 0.0)
             a_surface = (1.0 - w_land_ice) * a_surface + w_land_ice * float(cfg.earth.get("ice_albedo", 0.65))
-            ice_rgb = np.array(
-                _parse_rgb_triplet(cfg.earth.get("ice_rgb", [0.78, 0.82, 0.86]), (0.78, 0.82, 0.86)),
-                dtype=np.float64,
-            )
+            ice_rgb = np.array(resolve_ice_rgb(cfg.earth), dtype=np.float64)
             a_surface_rgb = (1.0 - w_land_ice[:, None]) * a_surface_rgb + w_land_ice[:, None] * ice_rgb[None, :]
         else:
             land_ice_mask = valid_land_ice & (land_ice >= float(cfg.earth.get("land_ice_mask_threshold", 0.5)))
@@ -527,10 +495,7 @@ def main() -> None:
                 a_surface = np.array(a_surface, copy=True)
                 a_surface[land_ice_mask] = float(cfg.earth.get("ice_albedo", 0.65))
                 a_surface_rgb = np.array(a_surface_rgb, copy=True)
-                a_surface_rgb[land_ice_mask, :] = np.array(
-                    _parse_rgb_triplet(cfg.earth.get("ice_rgb", [0.78, 0.82, 0.86]), (0.78, 0.82, 0.86)),
-                    dtype=np.float64,
-                )[None, :]
+                a_surface_rgb[land_ice_mask, :] = np.array(resolve_ice_rgb(cfg.earth), dtype=np.float64)[None, :]
                 if class_id is not None:
                     class_id = np.array(class_id, copy=True)
                     class_id[land_ice_mask] = float(cfg.earth.get("land_ice_class_value", 15.0))
@@ -553,10 +518,7 @@ def main() -> None:
         a_surface = np.array(a_surface, copy=True)
         a_surface[ice_mask] = float(cfg.earth.get("ice_albedo", 0.65))
         a_surface_rgb = np.array(a_surface_rgb, copy=True)
-        a_surface_rgb[ice_mask, :] = np.array(
-            _parse_rgb_triplet(cfg.earth.get("ice_rgb", [0.78, 0.82, 0.86]), (0.78, 0.82, 0.86)),
-            dtype=np.float64,
-        )[None, :]
+        a_surface_rgb[ice_mask, :] = np.array(resolve_ice_rgb(cfg.earth), dtype=np.float64)[None, :]
 
     # Illumination / viewing.
     s = _normalize(sun_pos[None, :] - pv)
@@ -618,14 +580,21 @@ def main() -> None:
         tau_local = np.full(lon.shape, tau, dtype=np.float64)
     trans = 1.0 - np.exp(-tau_k * tau_local)
     cloud_frac = np.clip(cloud_amt * trans * cloud_field, 0.0, 1.0)
-    cloud_rgb = np.array(
-        _parse_rgb_triplet(cfg.earth.get("cloud_rgb", [0.78, 0.80, 0.82]), (0.78, 0.80, 0.82)),
-        dtype=np.float64,
-    )
+    cloud_rgb = np.array(resolve_cloud_rgb(cfg.earth), dtype=np.float64)
     a_eff = (1.0 - cloud_frac) * a_surface + cloud_frac * cloud_alb
     a_eff = np.clip(a_eff, 0.0, 1.0) * float(cfg.earth.get("albedo", 1.0))
     a_eff_rgb = (1.0 - cloud_frac[:, None]) * a_surface_rgb + cloud_frac[:, None] * cloud_rgb[None, :]
     a_eff_rgb = np.clip(a_eff_rgb, 0.0, 1.0) * float(cfg.earth.get("albedo", 1.0))
+    brdf_factor = simple_brdf_factor(
+        cfg.earth,
+        class_id=class_id,
+        ocean_mask=ocean_cls,
+        ice_mask=ice_cls,
+        mu0=mu0,
+        muv=muv,
+    )
+    a_eff = np.clip(a_eff * brdf_factor, 0.0, 1.0)
+    a_eff_rgb = np.clip(a_eff_rgb * brdf_factor[:, None], 0.0, 1.0)
     a_eff_luma = 0.2126 * a_eff_rgb[:, 0] + 0.7152 * a_eff_rgb[:, 1] + 0.0722 * a_eff_rgb[:, 2]
     if earth_class_map is not None and np.any(np.isfinite(a_eff_luma)):
         a_eff = a_eff_luma
@@ -759,6 +728,7 @@ def main() -> None:
         "SEAICE": (int(bool(cfg.earth.get("seasonal_ice_enable", True))), "Seasonal ice 0/1"),
         "ECLSMAP": (Path(str(earth_class_map_path)).name if earth_class_map_path else "", "Earth class map"),
         "CLRPRES": (str(cfg.earth.get("class_rgb_preset", ""))[:16], "Class RGB preset"),
+        "CLRMODE": (earth_color_model(cfg.earth)[:16], "Earth RGB color model"),
     }
     hdr.update(_physical_layer_sum_cards(layers))
 

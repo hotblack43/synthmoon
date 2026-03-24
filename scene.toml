@@ -98,6 +98,7 @@ albedo_map_lon_mode = "0_360"
 class_map_fits = "DATA/MODIS/earth_landcover_modis_2011.fits"
 class_map_lon_mode = "-180_180"
 class_map_interp = "nearest"
+earth_color_model = "legacy"   # "legacy" | "physical_rgb"
 class_ocean_values = [0]
 class_land_values = []
 class_ice_values = [15]
@@ -105,6 +106,21 @@ class_rgb_preset = "modis_igbp"
 class_rgb_default = [0.20, 0.20, 0.20]
 cloud_rgb = [0.78, 0.80, 0.82]
 ice_rgb = [0.78, 0.82, 0.86]
+
+# Optional physical-RGB mode: treat surface classes as visible-band
+# reflectances rather than display colors. Camera bands are interpreted
+# approximately as R~650nm, G~550nm, B~450nm.
+physical_class_rgb_preset = "modis_igbp"
+physical_class_rgb_default = [0.20, 0.20, 0.20]
+physical_cloud_rgb = [0.90, 0.90, 0.90]
+physical_ice_rgb = [0.84, 0.87, 0.90]
+earth_brdf_model = "lambert"   # "lambert" | "simple_kernel"
+physical_brdf_strength_vegetation = 0.10
+physical_brdf_strength_desert = 0.20
+physical_brdf_strength_urban = 0.08
+physical_brdf_strength_wetland = 0.06
+physical_brdf_strength_ice = 0.05
+physical_brdf_strength_land_default = 0.10
 
 # Optional daily sea-ice fraction map (0..1 on lon/lat grid). Prefer this over fake latitude caps.
 ice_fraction_map_fits = "DATA/NSIDC/ice_fraction_20110706.fits"
