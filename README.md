@@ -28,7 +28,7 @@ pip install -e .
 ### 2) Download SPICE generic kernels
 
 ```bash
-python scripts/download_kernels.py
+uv run python scripts/download_kernels.py
 ```
 
 This downloads:
@@ -59,10 +59,14 @@ limb_offset_scale = 1.0       # 1.0 = limb
 ```bash
 synthmoon-render --config scene.toml
 # or:
-python -m synthmoon.run_v0 --config scene.toml
+uv run python -m synthmoon.run_v0 --config scene.toml
 ```
 
 Output FITS is written to `OUTPUT/` by default.
+
+Standard Moon-image renders now apply a default Gaussian PSF before the final output downsampling.
+The default is `psf_mode = "gaussian"` with `psf_fwhm_out_px = 0.85` in `scene.toml`.
+Written Moon FITS headers record `PSFMODE`, `PSFSIG`, `PSFFWHM`, `PSFOUT`, and `SUMPIX`.
 
 ### 5) Single image from Earth lon/lat at a given Julian Day
 
@@ -127,6 +131,279 @@ tools/go_single_image.sh \
   --jd 2453783.7623264 \
   --out OUTPUT/synth_moon_single_from_cli.fits
 ```
+
+One-command Moon/Earth pair wrapper (EO-aware):
+
+```bash
+tools/go_earth_moon_pair.sh \
+  --lon -155.5763 --lat 19.5362 --alt-m 3397 \
+  --jd 2455748.7651276 \
+  --out-dir OUTPUT
+```
+
+This script:
+- renders the matching Earth and Moon pair for the given UTC/JD and observer site
+- uses the recommended EO Earth workflow
+- checks whether the needed daily/yearly EO products are already on disk
+- if any EO input is missing, it stops and prints the exact `uv run` commands needed to download/extract the missing files
+
+Synthetic Earth FITS (for Earthlight diagnostics):
+
+```bash
+uv run python tools/render_earth_fits.py \
+  --config scene.toml \
+  --utc 2006-02-17T06:18:45Z \
+  --nx 1024 --ny 1024 \
+  --out OUTPUT/earth_synth_20060217T061845Z.fits
+```
+
+This writes a float64 FITS cube with scalar and RGB layers, including:
+`RAD_EAR, IF_EARTH, RAD_R, RAD_G, RAD_B, IF_R, IF_G, IF_B, A_EFF, AEFF_R, AEFF_G, AEFF_B, A_SURF, ASRF_R, ASRF_G, ASRF_B, CLOUDF, MU0, MUV, FSUN, ELON, ELAT, MASK`
+and `ECLASS` when a class map is active.
+(`RAD_EAR` is layer 1, and `RAD_R/G/B` carry the color-capable Earth radiance channels.)
+
+When the first-order Earth atmosphere is enabled, the cube also includes atmosphere diagnostics such as:
+`RAD_SURF, IF_SURF, RAD_ATM, ATM_R, ATM_G, ATM_B, ATMTOT, ATMT_R, ATMT_G, ATMT_B`.
+In that mode, `RAD_EAR` / `RAD_R/G/B` are atmosphere-inclusive totals.
+
+Earth glint model switch in `scene.toml`:
+
+```toml
+[earth]
+ocean_glint_model = "cox_munk"  # "simple" | "cox_munk"
+ocean_wind_m_s = 6.0
+ocean_refractive_index = 1.334
+ocean_glint_strength = 0.15
+```
+
+First-order Earth atmosphere switch in `scene.toml`:
+
+```toml
+[earth]
+atmosphere_enable = true
+atmosphere_strength = 0.12
+rayleigh_tau_rgb = [0.10, 0.06, 0.03]
+aerosol_tau_rgb = [0.02, 0.02, 0.018]
+aerosol_g = 0.70
+```
+
+This is a first-pass physically motivated model:
+- surface radiance is attenuated by atmospheric transmission
+- single-scattered Rayleigh + aerosol path radiance is added in RGB
+- the effect is strongest toward the limb and near the illuminated edge, not as a generic screen-space haze
+
+Optional Earth surface-class workflow (0=ocean, 1=land, 2=ice):
+
+```bash
+uv run python tools/make_earth_class_map_from_albedo.py \
+  --in-fits DATA/earth_albedo.fits \
+  --out-fits DATA/earth_class_map.fits
+```
+
+Then enable in `scene.toml`:
+
+```toml
+[earth]
+class_map_fits = "DATA/earth_class_map.fits"
+class_map_lon_mode = "-180_180"
+class_map_interp = "nearest"
+class_ocean_values = [0]
+class_land_values = [1]
+class_ice_values = [2]
+```
+
+Important:
+- this helper currently builds a simple class map from the existing albedo map
+- it is useful for testing class-driven logic
+- it is not the recommended default for the EO workflow described below
+- for the EO workflow, keep `class_map_fits` enabled if you have a proper class map, because the EO movie builder now preserves it
+
+EO-derived class map from MODIS land cover:
+
+```bash
+uv run python tools/make_earth_class_map_from_modis_landcover.py \
+  --in-hdf 'DATA/MODIS/MCD12C1*.hdf' \
+  --scheme modis_igbp \
+  --out-fits DATA/MODIS/earth_landcover_modis_2011.fits
+```
+
+This preserves the raw MODIS LC_Type1 / IGBP class ids so the renderer can distinguish
+water, forest, shrubland, grassland, cropland, urban, permanent snow/ice, barren desert, etc.
+The default `modis_igbp` RGB preset then assigns approximate visible reflectance colors per class.
+
+Then enable it explicitly:
+
+```toml
+[earth]
+class_map_fits = "DATA/MODIS/earth_landcover_modis_2011.fits"
+class_map_lon_mode = "0_360"
+class_map_interp = "nearest"
+class_ocean_values = [0]
+class_land_values = []
+class_ice_values = [15]
+class_rgb_preset = "modis_igbp"
+```
+
+Use this if you want richer surface typing and color-capable Earth products. The simpler EO default still works without any class map.
+
+Earthdata token setup for EO downloads:
+
+```bash
+export EARTHDATA_TOKEN='your_very_long_token_here'
+echo ${#EARTHDATA_TOKEN}
+```
+
+Add that `export` line to `~/.bashrc` if you want it available in future shells.
+
+MODIS daily global cloud maps (recommended over single `MOD06_L2` swaths):
+
+```bash
+uv run python tools/download_modis_cloud_granule.py \
+  --utc 2011-07-06T06:21:47Z \
+  --product MOD08_D3 \
+  --out-dir DATA/MODIS
+```
+
+Then extract cloud maps from the downloaded daily HDF:
+
+```bash
+uv run python tools/extract_modis_l3_cloud_maps.py \
+  --in-hdf 'DATA/MODIS/MOD08_D3*.hdf' \
+  --out-dir DATA/MODIS
+```
+
+This is a separate two-step workflow:
+- step 1 downloads the MODIS daily HDF from Earthdata
+- step 2 extracts lon/lat FITS maps from that HDF
+
+Point `scene.toml` at the extracted daily cloud maps:
+
+```toml
+[earth]
+cloud_fraction_map_fits = "DATA/MODIS/<daily_prefix>_cloud_fraction.fits"
+cloud_tau_map_fits = "DATA/MODIS/<daily_prefix>_cloud_tau.fits"
+cloud_map_lon_mode = "-180_180"
+cloud_map_interp = "nearest"
+```
+
+This daily Level-3 path avoids the narrow-strip problem of a single `MOD06_L2` swath.
+
+NSIDC daily sea-ice maps (sea ice only; not Greenland/Antarctic land ice):
+
+```bash
+uv run python tools/download_nsidc_g02202_daily.py \
+  --utc 2011-07-06T06:21:47Z \
+  --hemisphere both \
+  --out-dir DATA/NSIDC
+```
+
+Then convert the two polar daily files into one global lon/lat FITS ice-fraction map:
+
+```bash
+uv run python tools/extract_nsidc_g02202_ice_map.py \
+  --north-nc DATA/NSIDC/sic_psn25_20110706_F17_v05r00.nc \
+  --south-nc DATA/NSIDC/sic_pss25_20110706_F17_v05r00.nc \
+  --out-fits DATA/NSIDC/ice_fraction_20110706.fits
+```
+
+This is also a separate two-step workflow:
+- step 1 downloads the north and south NSIDC daily files
+- step 2 reprojects them into one equirectangular FITS map
+
+Enable that sea-ice map in `scene.toml`:
+
+```toml
+[earth]
+ice_fraction_map_fits = "DATA/NSIDC/ice_fraction_20110706.fits"
+ice_map_lon_mode = "-180_180"
+ice_map_interp = "nearest"
+ice_fraction_threshold = 0.15
+ice_fraction_blend = true
+
+# keep fake caps off when using real sea ice:
+class_ice_values = []
+seasonal_ice_enable = false
+```
+
+Important:
+- `MOD08_D3` gives daily global cloud fields
+- `G02202_V5` gives daily sea-ice concentration over ocean
+- neither product gives permanent land ice on Greenland or Antarctica
+
+Static land ice for Greenland and Antarctica:
+
+Use an annual MODIS land-cover product with a permanent snow/ice class. The easy global first choice is `MCD12C1`.
+
+Download the annual land-cover file:
+
+```bash
+uv run python tools/download_modis_landcover_file.py \
+  --year 2011 \
+  --product MCD12C1 \
+  --out-dir DATA/MODIS
+```
+
+Then extract a global land-ice mask FITS from the MODIS land-cover HDF:
+
+```bash
+uv run python tools/extract_modis_landice_mask.py \
+  --in-hdf 'DATA/MODIS/MCD12C1*.hdf' \
+  --out-fits DATA/MODIS/land_ice_mask_2011.fits
+```
+
+This is again a separate two-step workflow:
+- step 1 downloads the annual MODIS land-cover HDF
+- step 2 extracts a global 0..1 FITS mask for permanent land ice
+
+Enable that static land-ice mask in `scene.toml`:
+
+```toml
+[earth]
+land_ice_mask_fits = "DATA/MODIS/land_ice_mask_2011.fits"
+land_ice_mask_lon_mode = "-180_180"
+land_ice_mask_interp = "nearest"
+land_ice_mask_threshold = 0.5
+land_ice_mask_blend = true
+
+# keep fake caps off when using real products:
+class_ice_values = []
+seasonal_ice_enable = false
+```
+
+The extractor assumes the standard IGBP permanent snow/ice class value (`15`) from the MODIS LC_Type1 classification. You can override that on the command line if needed.
+
+A practical split is:
+- use `MCD12C1` for static land ice
+- use `G02202_V5` for daily sea ice
+- use `MOD08_D3` for daily clouds
+
+Current recommended EO-Earth default:
+
+```toml
+[earth]
+albedo_map_fits = "DATA/earth_albedo.fits"
+class_map_fits = "DATA/MODIS/earth_landcover_modis_2011.fits"
+
+cloud_fraction_map_fits = "DATA/MODIS/<daily_prefix>_cloud_fraction.fits"
+cloud_tau_map_fits = "DATA/MODIS/<daily_prefix>_cloud_tau.fits"
+cloud_map_lon_mode = "-180_180"
+
+ice_fraction_map_fits = "DATA/NSIDC/ice_fraction_YYYYMMDD.fits"
+ice_map_lon_mode = "-180_180"
+ice_fraction_blend = true
+
+land_ice_mask_fits = "DATA/MODIS/land_ice_mask_YYYY.fits"
+land_ice_mask_lon_mode = "-180_180"
+land_ice_mask_blend = true
+
+seasonal_ice_enable = false
+class_ice_values = []
+```
+
+This keeps the daily EO products while preserving land-cover-aware surface colour:
+- `tools/build_earth_color_movie_jd_eo.py` rewrites the daily cloud, sea-ice, and land-ice inputs
+- it does not blank `class_map_fits`
+- it does force `seasonal_ice_enable = false` to avoid stacking synthetic seasonal ice on top of real NSIDC sea ice
 
 Regression check for earthlight layers (IF_EARTH/RAD_EAR non-zero at a known UTC):
 ```bash
@@ -196,6 +473,61 @@ python tools/build_movie_video_hourly.py \
   --tmp-fits /tmp/synthmoon_movie_frame.fits \
   --crf 18
 ```
+
+Earth-only color movie over a JD range, with optional black padding around the disk:
+```bash
+uv run python tools/build_earth_color_movie_jd.py \
+  --config scene.toml \
+  --start-jd 2453789.7630208 \
+  --end-jd 2453790.7630208 \
+  --step-hours 0.3333333333 \
+  --nx 1024 --ny 1024 \
+  --pad-frac 0.10 \
+  --out-mp4 OUTPUT/earth_movie_jd_color.mp4
+```
+
+This uses the Earth RGB radiance layers (`RAD_R/G/B`) from `tools/render_earth_fits.py`
+and writes a color MP4. If needed, flip the result for playback with:
+
+```bash
+ffmpeg -y -i OUTPUT/earth_movie_jd_color.mp4 -vf vflip \
+  -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p \
+  OUTPUT/earth_movie_jd_color_vflip.mp4
+```
+
+EO-aware Earth-only color movie over a JD range, with daily MODIS/NSIDC updates and automatic RGB-sums CSV plus plots:
+```bash
+uv run python tools/build_earth_color_movie_jd_eo_fast.py \
+  --config scene.toml \
+  --start-jd 2453789.7630208 \
+  --end-jd 2453791.7630208 \
+  --step-hours 0.1666666667 \
+  --nx 1024 --ny 1024 \
+  --pad-frac 0.10 \
+  --out-mp4 OUTPUT/earth_movie_2d_10min_eo_fast_atm_on.mp4 \
+  --fetch-missing
+```
+
+Notes:
+- `--fetch-missing` downloads missing daily EO inputs
+- this fast path keeps rendering in one Python process, reuses loaded kernels/maps, and avoids per-frame FITS write/read churn
+- by default it writes `<out-mp4 stem>_rgb.csv` with columns `jd,sum_r,sum_g,sum_b`
+- by default it also writes `<out-mp4 stem>_ratio_combined.png` and `<out-mp4 stem>_mag_combined.png`
+- unless you add `--keep-frames`, the script removes its temporary PNG/config workdir after encoding the movie
+- `--pad-frac` adds a black border around the frame, expressed as a fraction of width/height on each side
+- the EO movie builder preserves `class_map_fits` if your base config enables a land-cover class map
+- if you do not want the plots, add `--no-rgb-plots`
+
+The simple plotting script can still be used directly if you already have a movie-time CSV:
+```bash
+uv run python tools/plot_earth_rgb_simple_csv.py \
+  --csv OUTPUT/earth_movie_2d_10min_eo_fast_atm_on_rgb.csv \
+  --out-prefix OUTPUT/earth_movie_2d_10min_eo_fast_atm_on
+```
+
+This writes:
+- `..._ratio_combined.png` with `R/G`, `R/B`, `G/B`
+- `..._mag_combined.png` with `$m_R - m_G$`, `$m_R - m_B$`, and `$m_B - m_G$`
 
 ## Notes
 

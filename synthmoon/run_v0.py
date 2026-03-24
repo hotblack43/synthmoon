@@ -77,6 +77,45 @@ def _downsample_mean2d(arr: np.ndarray, out_ny: int, out_nx: int) -> np.ndarray:
     return xr.mean(axis=(1, 3), dtype=np.float64)
 
 
+def _gaussian_kernel1d_sigma_px(sigma_px: float, truncate: float = 4.0) -> np.ndarray:
+    sigma = float(sigma_px)
+    if sigma <= 0.0:
+        return np.array([1.0], dtype=np.float64)
+    radius = max(1, int(np.ceil(truncate * sigma)))
+    x = np.arange(-radius, radius + 1, dtype=np.float64)
+    k = np.exp(-0.5 * (x / sigma) ** 2)
+    s = float(k.sum())
+    if s <= 0.0 or not np.isfinite(s):
+        return np.array([1.0], dtype=np.float64)
+    return k / s
+
+
+def _convolve_axis_reflect(arr: np.ndarray, kernel: np.ndarray, axis: int) -> np.ndarray:
+    x = np.asarray(arr, dtype=np.float64)
+    if x.ndim != 2:
+        raise ValueError(f"Expected 2D array for convolution, got shape={x.shape}")
+    radius = int(len(kernel) // 2)
+    if radius == 0:
+        return x.copy()
+    pad_spec = [(0, 0), (0, 0)]
+    pad_spec[axis] = (radius, radius)
+    xp = np.pad(x, pad_spec, mode="reflect")
+    out = np.zeros_like(x, dtype=np.float64)
+    if axis == 0:
+        for i, w in enumerate(kernel):
+            out += float(w) * xp[i:i + x.shape[0], :]
+    else:
+        for i, w in enumerate(kernel):
+            out += float(w) * xp[:, i:i + x.shape[1]]
+    return out
+
+
+def _gaussian_blur2d(arr: np.ndarray, sigma_px: float) -> np.ndarray:
+    kernel = _gaussian_kernel1d_sigma_px(float(sigma_px))
+    tmp = _convolve_axis_reflect(arr, kernel, axis=1)
+    return _convolve_axis_reflect(tmp, kernel, axis=0)
+
+
 def _tangent_basis(boresight_u: np.ndarray, north_hint_u: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return (right, up) unit vectors in the plane tangent to boresight."""
     up = north_hint_u - np.dot(north_hint_u, boresight_u) * boresight_u
@@ -714,6 +753,56 @@ def main(argv: list[str] | None = None) -> None:
         earth_lon_mode = str(cfg.earth.get("albedo_map_lon_mode", "0_360"))
         earth_map = EquirectMap.load_fits(earth_map_path, lon_mode=earth_lon_mode, fill=float(cfg.earth.get("albedo_map_fill", 0.30)))
 
+    earth_class_map = None
+    earth_class_map_path = cfg.earth.get("class_map_fits", None)
+    if earth_class_map_path:
+        earth_class_lon_mode = str(cfg.earth.get("class_map_lon_mode", str(cfg.earth.get("albedo_map_lon_mode", "0_360"))))
+        earth_class_map = EquirectMap.load_fits(
+            earth_class_map_path,
+            lon_mode=earth_class_lon_mode,
+            fill=float(cfg.earth.get("class_map_fill", -999.0)),
+        )
+
+    earth_cloud_fraction_map = None
+    earth_cloud_fraction_map_path = cfg.earth.get("cloud_fraction_map_fits", None)
+    if earth_cloud_fraction_map_path:
+        earth_cloud_lon_mode = str(cfg.earth.get("cloud_map_lon_mode", str(cfg.earth.get("albedo_map_lon_mode", "0_360"))))
+        earth_cloud_fraction_map = EquirectMap.load_fits(
+            earth_cloud_fraction_map_path,
+            lon_mode=earth_cloud_lon_mode,
+            fill=float(cfg.earth.get("cloud_fraction_map_fill", 0.0)),
+        )
+
+    earth_cloud_tau_map = None
+    earth_cloud_tau_map_path = cfg.earth.get("cloud_tau_map_fits", None)
+    if earth_cloud_tau_map_path:
+        earth_cloud_lon_mode = str(cfg.earth.get("cloud_map_lon_mode", str(cfg.earth.get("albedo_map_lon_mode", "0_360"))))
+        earth_cloud_tau_map = EquirectMap.load_fits(
+            earth_cloud_tau_map_path,
+            lon_mode=earth_cloud_lon_mode,
+            fill=float(cfg.earth.get("cloud_tau_map_fill", 0.0)),
+        )
+
+    earth_ice_fraction_map = None
+    earth_ice_fraction_map_path = cfg.earth.get("ice_fraction_map_fits", None)
+    if earth_ice_fraction_map_path:
+        earth_ice_lon_mode = str(cfg.earth.get("ice_map_lon_mode", str(cfg.earth.get("albedo_map_lon_mode", "0_360"))))
+        earth_ice_fraction_map = EquirectMap.load_fits(
+            earth_ice_fraction_map_path,
+            lon_mode=earth_ice_lon_mode,
+            fill=float(cfg.earth.get("ice_fraction_map_fill", 0.0)),
+        )
+
+    earth_land_ice_mask_map = None
+    earth_land_ice_mask_path = cfg.earth.get("land_ice_mask_fits", None)
+    if earth_land_ice_mask_path:
+        earth_land_ice_lon_mode = str(cfg.earth.get("land_ice_mask_lon_mode", str(cfg.earth.get("albedo_map_lon_mode", "0_360"))))
+        earth_land_ice_mask_map = EquirectMap.load_fits(
+            earth_land_ice_mask_path,
+            lon_mode=earth_land_ice_lon_mode,
+            fill=float(cfg.earth.get("land_ice_mask_fill", 0.0)),
+        )
+
     # Optional lunar DEM (absolute radius) for orography
     moon_dem = None
     dem_path = cfg.moon.get("dem_fits", None)
@@ -932,14 +1021,44 @@ def main(argv: list[str] | None = None) -> None:
                     nx=nx,
                     ny=ny,
                     earth_map=earth_map,
+                    earth_class_map=earth_class_map,
+                    earth_cloud_fraction_map=earth_cloud_fraction_map,
+                    earth_cloud_tau_map=earth_cloud_tau_map,
+                    earth_ice_fraction_map=earth_ice_fraction_map,
+                    earth_land_ice_mask_map=earth_land_ice_mask_map,
+                    earth_class_interp=str(cfg.earth.get("class_map_interp", "nearest")),
+                    earth_class_ocean_values=tuple(float(v) for v in cfg.earth.get("class_ocean_values", [0])),
+                    earth_class_land_values=tuple(float(v) for v in cfg.earth.get("class_land_values", [1])),
+                    earth_class_ice_values=tuple(float(v) for v in cfg.earth.get("class_ice_values", [2])),
                     earth_ocean_albedo=float(cfg.earth.get("ocean_albedo", 0.06)),
                     earth_land_albedo=float(cfg.earth.get("land_albedo", 0.25)),
                     earth_cloud_amount=float(cfg.earth.get("cloud_amount", 0.0)),
                     earth_cloud_albedo=float(cfg.earth.get("cloud_albedo", 0.6)),
+                    earth_cloud_tau=float(cfg.earth.get("cloud_tau", 1.0)),
+                    earth_cloud_tau_k=float(cfg.earth.get("cloud_tau_k", 1.0)),
                     earth_map_interp=str(cfg.earth.get("albedo_map_interp", "nearest")),
+                    earth_cloud_map_interp=str(cfg.earth.get("cloud_map_interp", "nearest")),
+                    earth_ice_map_interp=str(cfg.earth.get("ice_map_interp", "nearest")),
+                    earth_ice_fraction_threshold=float(cfg.earth.get("ice_fraction_threshold", 0.15)),
+                    earth_ice_fraction_blend=bool(cfg.earth.get("ice_fraction_blend", True)),
+                    earth_land_ice_interp=str(cfg.earth.get("land_ice_mask_interp", "nearest")),
+                    earth_land_ice_threshold=float(cfg.earth.get("land_ice_mask_threshold", 0.5)),
+                    earth_land_ice_blend=bool(cfg.earth.get("land_ice_mask_blend", False)),
+                    ocean_glint_model=str(cfg.earth.get("ocean_glint_model", "simple")),
                     ocean_glint_strength=float(cfg.earth.get("ocean_glint_strength", 0.0)),
                     ocean_glint_sigma_deg=float(cfg.earth.get("ocean_glint_sigma_deg", 6.0)),
                     ocean_glint_threshold=float(cfg.earth.get("ocean_glint_threshold", 0.12)),
+                    ocean_wind_m_s=float(cfg.earth.get("ocean_wind_m_s", 6.0)),
+                    ocean_refractive_index=float(cfg.earth.get("ocean_refractive_index", 1.334)),
+                    ocean_glint_max_albedo_increment=float(cfg.earth.get("ocean_glint_max_albedo_increment", 2.0)),
+                    earth_seasonal_ice=bool(cfg.earth.get("seasonal_ice_enable", True)),
+                    earth_ice_albedo=float(cfg.earth.get("ice_albedo", 0.65)),
+                    earth_ice_lat_north_base_deg=float(cfg.earth.get("ice_lat_north_base_deg", 72.0)),
+                    earth_ice_lat_north_amp_deg=float(cfg.earth.get("ice_lat_north_amp_deg", 8.0)),
+                    earth_ice_lat_south_base_deg=float(cfg.earth.get("ice_lat_south_base_deg", 68.0)),
+                    earth_ice_lat_south_amp_deg=float(cfg.earth.get("ice_lat_south_amp_deg", 5.0)),
+                    earth_ice_phase_north_doy=float(cfg.earth.get("ice_phase_north_doy", 20.0)),
+                    earth_ice_phase_south_doy=float(cfg.earth.get("ice_phase_south_doy", 200.0)),
                 ).astype(np.float64)
 
         total_if = sun_if + earth_if
@@ -1009,6 +1128,31 @@ def main(argv: list[str] | None = None) -> None:
     out_ny = int(cfg.output.get("downsample_to_ny", render_ny) or render_ny)
     if (out_nx <= 0) or (out_ny <= 0):
         raise ValueError(f"Invalid downsample target: ({out_nx},{out_ny})")
+    psf_mode = str(cfg.output.get("psf_mode", "gaussian")).strip().lower()
+    psf_sigma_px = float(cfg.output.get("psf_sigma_px", 0.0) or 0.0)
+    psf_fwhm_px = float(cfg.output.get("psf_fwhm_px", 0.0) or 0.0)
+    psf_fwhm_out_px = float(cfg.output.get("psf_fwhm_out_px", 0.85) or 0.0)
+    if psf_sigma_px <= 0.0 and psf_fwhm_px <= 0.0 and psf_fwhm_out_px > 0.0:
+        sx = float(render_nx) / float(out_nx)
+        sy = float(render_ny) / float(out_ny)
+        psf_fwhm_px = psf_fwhm_out_px * 0.5 * (sx + sy)
+    if psf_sigma_px <= 0.0 and psf_fwhm_px > 0.0:
+        psf_sigma_px = psf_fwhm_px / 2.3548200450309493
+    if psf_mode in ("none", "", "off"):
+        psf_sigma_px = 0.0
+        psf_fwhm_px = 0.0
+    elif psf_mode != "gaussian":
+        raise ValueError(f"Unsupported output.psf_mode={psf_mode!r}; supported: none, gaussian")
+
+    # Apply PSF at the internal render resolution, before detector-like downsampling.
+    if psf_sigma_px > 0.0:
+        img_if_total = _gaussian_blur2d(img_if_total, psf_sigma_px)
+        img_if_sun = _gaussian_blur2d(img_if_sun, psf_sigma_px)
+        img_if_earth = _gaussian_blur2d(img_if_earth, psf_sigma_px)
+        img_rad_total = _gaussian_blur2d(img_rad_total, psf_sigma_px)
+        img_rad_sun = _gaussian_blur2d(img_rad_sun, psf_sigma_px)
+        img_rad_earth = _gaussian_blur2d(img_rad_earth, psf_sigma_px)
+
     if (out_nx != render_nx) or (out_ny != render_ny):
         img_if_total = _downsample_mean2d(img_if_total, out_ny, out_nx)
         img_if_sun = _downsample_mean2d(img_if_sun, out_ny, out_nx)
@@ -1049,6 +1193,19 @@ def main(argv: list[str] | None = None) -> None:
         "DEMSCAL": (dem_scale if dem_path else 1.0, "DEM relief scl"),
         "DEMREFI": (dem_refine_iter if dem_path else 0, "DEM refine"),
         "ALBEARTH": (float(cfg.earth.get("albedo", 1.0)), "Earth alb scl"),
+        "ECLSMAP": (Path(str(earth_class_map_path)).name if earth_class_map_path else "", "Earth class map"),
+        "ECLDMAP": (Path(str(earth_cloud_fraction_map_path)).name if earth_cloud_fraction_map_path else "", "Earth cloud frac map"),
+        "ECLDTMAP": (Path(str(earth_cloud_tau_map_path)).name if earth_cloud_tau_map_path else "", "Earth cloud tau map"),
+        "EICEMAP": (Path(str(earth_ice_fraction_map_path)).name if earth_ice_fraction_map_path else "", "Earth ice frac map"),
+        "ELIMAP": (Path(str(earth_land_ice_mask_path)).name if earth_land_ice_mask_path else "", "Earth land ice map"),
+        "EGLMOD": (str(cfg.earth.get("ocean_glint_model", "simple"))[:16], "Earth glint model"),
+        "EGLSTR": (float(cfg.earth.get("ocean_glint_strength", 0.0)), "Earth glint str"),
+        "EGLWND": (float(cfg.earth.get("ocean_wind_m_s", 6.0)), "Earth wind m/s"),
+        "ECLDAMT": (float(cfg.earth.get("cloud_amount", 0.0)), "Earth cloud amt"),
+        "ECLDTAU": (float(cfg.earth.get("cloud_tau", 1.0)), "Earth cloud tau"),
+        "ECLDK": (float(cfg.earth.get("cloud_tau_k", 1.0)), "Earth cloud tau-k"),
+        "ESEAICE": (int(bool(cfg.earth.get("seasonal_ice_enable", True))), "Earth seasonal ice 0/1"),
+        "EICEALB": (float(cfg.earth.get("ice_albedo", 0.65)), "Earth ice alb"),
         "EDSAMP": (int(cfg.earth.get("earth_disk_samples", 192)), "E samp"),
         "EARTHPT": (earth_point_hdr, "Earth point 0/1"),
         "TILEPX": (int(cfg.earth.get("earthlight_tile_px", 16)), "Tile px"),
@@ -1081,6 +1238,11 @@ def main(argv: list[str] | None = None) -> None:
 
     sc = scale_to_0_65535_float(img_if_total)
 
+    header_cards["PSFMODE"] = (psf_mode[:16], "Moon-image PSF mode")
+    header_cards["PSFSIG"] = (psf_sigma_px, "PSF sigma on render grid px")
+    header_cards["PSFFWHM"] = (psf_fwhm_px, "PSF FWHM on render grid px")
+    header_cards["PSFOUT"] = (psf_fwhm_out_px if psf_mode != "none" else 0.0, "PSF FWHM on output grid px")
+
     layers = {
         "SCALED":   (sc.scaled, "0..65535 (float)"),
         "IFTOTAL":  (img_if_total, "I/F"),
@@ -1092,11 +1254,33 @@ def main(argv: list[str] | None = None) -> None:
         "ALBMOON":  (img_alb_moon, "albedo"),
         "ELEV_M":   (img_elev_m, "elev m (DEM-mean)"),
         "SLOPDEG":  (img_slope_deg, "slope deg"),
+        # Explicit sunlit-fraction diagnostic for downstream cube consumers.
+        "SUNLIT":   (img_sun_vis, "Sunlit frac [0..1]"),
         "SUNVIS":   (img_sun_vis, "Sun vis frac [0..1]"),
         "SUNBLK":   (img_sun_blk, "Sun blocked frac [0..1]"),
         "SELON":    (img_selon_deg, "deg"),
         "SELAT":    (img_selat_deg, "deg"),
     }
+
+    write_cube = bool(cfg.output.get("write_cube", True))
+
+    cube_layer_names = cfg.output.get("cube_layer_names", None)
+    if write_cube and (cube_layer_names is not None):
+        if not isinstance(cube_layer_names, (list, tuple)):
+            raise ValueError("output.cube_layer_names must be a list of layer names")
+        selected_layers: dict[str, tuple[np.ndarray, str]] = {}
+        for name in cube_layer_names:
+            k = str(name).strip()
+            if k not in layers:
+                raise ValueError(
+                    f"output.cube_layer_names contains unknown layer {k!r}. "
+                    f"Available layers: {list(layers.keys())}"
+                )
+            selected_layers[k] = layers[k]
+        if not selected_layers:
+            raise ValueError("output.cube_layer_names selected no layers")
+        layers = selected_layers
+        header_cards["CUBELAY"] = (",".join(layers.keys())[:68], "Selected cube layers")
 
     # Optional: write only a single layer (1-based index) to keep output small for long sequences.
     only_i = cfg.output.get("only_layer_index", None)
@@ -1113,9 +1297,12 @@ def main(argv: list[str] | None = None) -> None:
         header_cards["ONLYLAY"] = (only_i, "Only Nth layer written (1-based)")
         header_cards["ONLYNAME"] = (k, "Name of ONLYLAY")
 
+    if len(layers) == 1:
+        only_name = next(iter(layers.keys()))
+        only_arr = np.asarray(layers[only_name][0], dtype=np.float64)
+        header_cards["SUMPIX"] = (float(np.nansum(only_arr)), "Sum of written image pixels")
 
 
-    write_cube = bool(cfg.output.get("write_cube", True))
     if write_cube:
         write_fits_cube(
             out_path=out_path,

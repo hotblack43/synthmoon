@@ -86,6 +86,8 @@ include_earthlight = true
 mode = "simple"
 
 [output]
+psf_mode = "gaussian"
+psf_fwhm_out_px = 0.85         # default small-telescope Moon PSF at final output scale
 # Keep computations float. For convenient viewing in DS9, the primary cube is scaled to 0..65535 in float.
 primary_dtype = "float32"          # "float32" or "float64"
 primary_scaled_0_65535 = true

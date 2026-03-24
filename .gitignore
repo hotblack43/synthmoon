@@ -3,7 +3,14 @@ OUTPUT/
 DATA/LROC/
 DATA/moon_albedo_*.fits
 *.tif
+*.nc
+*.hdf
+*.aux.xml
 *.tiff
+DATA/
+*.fits
+*.grd
+*.rds
 synthmoon_v0_patch*.zip
 OLD/
 
@@ -11,6 +18,8 @@ OLD/
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 *.egg-info/
 
 # DEM / big data
@@ -20,3 +29,11 @@ DATA/moon_dem_*.fits
 # local outputs / artefacts
 *.fits
 synthmoon.egg-info/
+DATA/MODIS/*.hdf
+DATA/NSIDC/*.nc
+DATA/MODIS/*.aux.xml
+want.txt
+
+# local backup/edit residue
+*.bak
+*.bak*

@@ -92,15 +92,93 @@ earthlight_tile_px = 16
 # Optional Earth albedo map FITS (equirectangular). If omitted, a toy land/ocean + clouds model may be used.
 albedo_map_fits = "DATA/earth_albedo.fits"
 albedo_map_lon_mode = "0_360"
+
+# Optional Earth surface class map FITS (equirectangular).
+# Here we use preserved MODIS IGBP class ids so land-cover-specific RGB can be assigned.
+class_map_fits = "DATA/MODIS/earth_landcover_modis_2011.fits"
+class_map_lon_mode = "-180_180"
+class_map_interp = "nearest"
+earth_color_model = "legacy"   # "legacy" | "physical_rgb"
+class_ocean_values = [0]
+class_land_values = []
+class_ice_values = [15]
+class_rgb_preset = "modis_igbp"
+class_rgb_default = [0.20, 0.20, 0.20]
+cloud_rgb = [0.78, 0.80, 0.82]
+ice_rgb = [0.78, 0.82, 0.86]
+
+# Optional physical-RGB mode: treat surface classes as visible-band
+# reflectances rather than display colors. Camera bands are interpreted
+# approximately as R~650nm, G~550nm, B~450nm.
+physical_class_rgb_preset = "modis_igbp"
+physical_class_rgb_default = [0.20, 0.20, 0.20]
+physical_cloud_rgb = [0.90, 0.90, 0.90]
+physical_ice_rgb = [0.84, 0.87, 0.90]
+earth_brdf_model = "lambert"   # "lambert" | "simple_kernel"
+physical_brdf_strength_vegetation = 0.10
+physical_brdf_strength_desert = 0.20
+physical_brdf_strength_urban = 0.08
+physical_brdf_strength_wetland = 0.06
+physical_brdf_strength_ice = 0.05
+physical_brdf_strength_land_default = 0.10
+
+# Optional daily sea-ice fraction map (0..1 on lon/lat grid). Prefer this over fake latitude caps.
+ice_fraction_map_fits = "DATA/NSIDC/ice_fraction_20110706.fits"
+ice_map_lon_mode = "-180_180"
+ice_map_interp = "nearest"
+ice_fraction_threshold = 0.15
+ice_fraction_blend = true
+
+# Optional static land-ice mask (0..1 on lon/lat grid), e.g. Greenland/Antarctica from MCD12C1.
+land_ice_mask_fits = "DATA/MODIS/land_ice_mask_2011.fits"
+land_ice_mask_lon_mode = "-180_180"
+land_ice_mask_interp = "nearest"
+land_ice_mask_threshold = 0.5
+land_ice_mask_blend = true
+
 land_albedo = 0.25
 ocean_albedo = 0.06
-cloud_amount = 0.0     # 0..1
+cloud_amount = 0.5     # 0..1
 cloud_albedo = 0.6 # 0.6
+cloud_tau = 1.5        # effective cloud optical thickness
+cloud_tau_k = 1.0      # transmission shaping: 1-exp(-k*tau)
+
+# Optional cloud maps (equirectangular). If set, these replace synthetic cloud field.
+cloud_fraction_map_fits = "DATA/MODIS/mod08_d3.a2011187.061.2017325045937_cloud_fraction.fits"
+cloud_tau_map_fits = "DATA/MODIS/mod08_d3.a2011187.061.2017325045937_cloud_tau.fits"
+cloud_map_lon_mode = "-180_180"
+cloud_map_interp = "nearest"
+
+# Optional simple seasonal polar caps (latitude threshold varies by day-of-year)
+seasonal_ice_enable = false
+ice_albedo = 0.65
+ice_lat_north_base_deg = 72.0
+ice_lat_north_amp_deg = 8.0
+ice_lat_south_base_deg = 68.0
+ice_lat_south_amp_deg = 5.0
+ice_phase_north_doy = 20.0
+ice_phase_south_doy = 200.0
 
 # optional: ocean sunglint (simple, fast)
+ocean_glint_model = "cox_munk"   # "simple" | "cox_munk"
 ocean_glint_strength = 0.15
 ocean_glint_sigma_deg = 6.0
 ocean_glint_threshold = 0.12
+ocean_wind_m_s = 6.0
+ocean_refractive_index = 1.334
+ocean_glint_max_albedo_increment = 2.0
+
+# Optional first-order atmosphere on top of the surface model:
+# surface * transmission + single-scattered path radiance
+atmosphere_enable = true
+atmosphere_strength = 0.12
+atmosphere_mu_floor = 0.03
+atmosphere_limb_boost_power = 0.15
+atmosphere_twilight_mu = 0.12
+atmosphere_sky_rgb = [0.60, 0.72, 1.00]
+rayleigh_tau_rgb = [0.10, 0.06, 0.03]
+aerosol_tau_rgb = [0.02, 0.02, 0.018]
+aerosol_g = 0.70
 
 [sun]
 # Extended solar disk (finite angular size) matters near the terminator/horizon.
@@ -118,16 +196,19 @@ mode = "dem"
 sun = "dem"
 
 [output]
+psf_mode = "gaussian"
+psf_fwhm_out_px = 0.85         # small-telescope Moon PSF at final output scale
 # Keep computations float. For convenient viewing in DS9, the primary cube is scaled to 0..65535 in float.
 primary_dtype = "float64"          # "float32" or "float64"
 primary_scaled_0_65535 = true
 store_raw_extension = true         # store unscaled physical-ish layer(s) as extra extension if implemented
 write_cube = false                 # write a single 2D image layer (requires only_layer_index)
+cube_layer_names = ["RADTOT", "SUNLIT"]   # for cube output: keep only compact Moon layers, in this order
 bunit = "I/F_moon"                 # unit label for the primary scaled layer (actual physical units are in other layers)
 # Render at camera.nx/ny, then downsample by block-mean to output size (anti-aliased).
 downsample_to_nx = 512
 downsample_to_ny = 512
-only_layer_index = 2              # 2 = IFTOTAL (advanced image)
+only_layer_index = 5              # 5 = RADTOT (Moon radiance in physical units)
 
 [comparison]
 # If true, run two renders per call:

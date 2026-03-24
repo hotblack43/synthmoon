@@ -1,0 +1,37 @@
+ \section{Configurable Colour Rendition and Band-Dependent Scattering}
+
+  The current Earth renderer now supports two related but distinct colour-rendering modes. In the legacy mode, the visible appearance is
+  controlled primarily through user-specified RGB triplets associated with land-cover classes, cloud, and ice. This mode is retained because
+  it is fast, visually useful, and backward-compatible with earlier tuning work. In addition, a new \texttt{physical\_rgb} mode has been
+  introduced. This newer mode is still deliberately simple, but it moves the model closer to an explicit visible-band reflectance formulation.
+  In practical terms, the red, green, and blue channels are interpreted as approximate camera bands centred near 650\,nm, 550\,nm, and
+  450\,nm, and the assigned class colours are treated as broadband reflectance anchors rather than purely display-oriented colours.
+
+  The switch between these two modes is exposed directly in the Earth configuration via \texttt{earth\_color\_model = "legacy"} or
+  \texttt{earth\_color\_model = "physical\_rgb"}. This is important scientifically because it allows experiments with different colour
+  assumptions without breaking the previously tuned workflow. In the \texttt{physical\_rgb} mode, the MODIS IGBP land-surface classes are
+  assigned a separate set of visible-band reflectance triplets. These may still be adjusted by the user, and this is intentional: the aim is
+  not to freeze the surface model prematurely, but to make the colour assumptions explicit, inspectable, and reproducible.
+
+  The same philosophy applies to cloud and ice. In legacy mode, cloud and ice colours are specified through \texttt{cloud\_rgb} and
+  \texttt{ice\_rgb}. In the newer mode, the defaults are shifted toward more neutral solar-coloured reflectors via
+  \texttt{physical\_cloud\_rgb} and \texttt{physical\_ice\_rgb}. This reflects the expectation that optically thick clouds and bright snow or
+  ice should usually be much less chromatic than vegetated land, desert terrain, or ocean water. Because these quantities remain configuration
+  parameters, the user can still explore alternative assumptions about cloud whiteness, sea-ice tint, or land-ice brightness when scientific
+  or illustrative needs differ.
+
+  The atmosphere is also wavelength-dependent, but at present it should still be regarded as semi-physical rather than fully derived from
+  first principles. The model separates Rayleigh and aerosol optical depth, applies them independently in the red, green, and blue bands, and
+  uses them both to attenuate surface radiance and to generate additive path radiance. Thus, the atmosphere is not merely a display tint: it
+  contributes chromatic structure through per-band transmission and scattering. However, the governing parameters are still specified directly
+  as \texttt{rayleigh\_tau\_rgb} and \texttt{aerosol\_tau\_rgb}, together with a Henyey--Greenstein asymmetry parameter \texttt{aerosol\_g},
+  an overall strength factor, and a sky-colour term. The result is therefore physically motivated and wavelength-aware, but not yet a full
+  pressure-, composition-, and wavelength-law-derived atmospheric solver.
+
+  This separation of concerns is useful. Surface class colour, cloud and ice reflectance, ocean appearance, and atmospheric scattering can now
+  be adjusted independently and transparently. For exploratory Earth rendering, this is a substantial improvement over a single monolithic RGB
+  tuning step. It allows the user to ask separate scientific questions such as whether a given colour trend arises from surface classes, from
+  cloud neutralisation, from aerosol loading, or from Rayleigh-enhanced blue scattering at the limb. The current implementation is therefore
+  best viewed as an intermediate stage between a purely illustrative RGB renderer and a more rigorously band-integrated Earth radiance model.
+
+
